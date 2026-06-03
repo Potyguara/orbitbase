@@ -1,0 +1,40 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+.venv/
+venv/
+
+# Env
+.env
+.env.*
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Storage / processamento / downloads
+storage/
+backend/storage/
+
+# Logs
+*.log
+
+# Cache / testes
+.pytest_cache/
+.mypy_cache/
+
+# VS Code
+.vscode/
+
+# Front
+node_modules/
+dist/
+build/

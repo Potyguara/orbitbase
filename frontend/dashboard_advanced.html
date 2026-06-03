@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OrbitBase | Dashboard Avançada</title>
+  <link rel="stylesheet" href="./styles.css?v=700" />
+</head>
+<body class="dashboard-body">
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand">
+        <div class="brand-mark">O</div>
+        <div>
+          <h1>OrbitBase</h1>
+          <p>Modo Avançado Experimental</p>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <a class="btn btn-outline" href="./dashboard.html">Modo básico</a>
+     <button id="go-profile-btn" class="btn btn-outline" type="button">Perfil</button>
+        <button id="logout-btn" class="btn btn-outline" type="button">Sair</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="section muted">
+    <div class="container dashboard-shell">
+
+      <section class="dashboard-card dashboard-card-full">
+        <div class="dashboard-head">
+          <div>
+            <span class="eyebrow">VRS Advanced</span>
+            <h3>Processamento experimental com interpolação temporal</h3>
+            <p class="section-subtitle">
+              Ambiente isolado para testes de efemérides precisas, grade temporal fina e observáveis interpoladas.
+            </p>
+          </div>
+        </div>
+
+        <form id="advanced-job-form" class="form-card">
+          <div class="form-section-title">Identificação</div>
+          <div class="form-grid">
+            <div class="form-field form-field-full">
+              <label for="advanced-job-id">ID do job existente</label>
+              <input id="advanced-job-id" type="number" min="1" placeholder="Ex.: 114" required />
+            </div>
+          </div>
+
+          <div class="form-section-title">Janela temporal avançada</div>
+          <div class="form-grid">
+            <div class="form-field">
+              <label for="advanced-session-date">Data</label>
+              <input id="advanced-session-date" type="date" required />
+            </div>
+
+            <div class="form-field">
+              <label for="advanced-start-time">Hora inicial (HH:MM:SS)</label>
+              <input id="advanced-start-time" type="text" placeholder="09:13:08" required />
+            </div>
+
+            <div class="form-field">
+              <label for="advanced-end-time">Hora final (HH:MM:SS)</label>
+              <input id="advanced-end-time" type="text" placeholder="09:55:08" required />
+            </div>
+
+            <div class="form-field">
+              <label for="advanced-step-seconds">Passo temporal alvo (s)</label>
+              <input id="advanced-step-seconds" type="number" min="1" value="1" required />
+            </div>
+          </div>
+
+          <div class="form-section-title">Configuração experimental</div>
+          <div class="form-grid">
+            <div class="form-field">
+              <label for="advanced-receiver-brand">Marca do receptor virtual</label>
+              <input id="advanced-receiver-brand" type="text" value="ORBITBASE" />
+            </div>
+
+            <div class="form-field">
+              <label for="advanced-receiver-model">Modelo do receptor virtual</label>
+              <input id="advanced-receiver-model" type="text" value="VIRTUAL_GNSS_ADV" />
+            </div>
+
+            <div class="form-field">
+              <label for="advanced-receiver-version">Versão</label>
+              <input id="advanced-receiver-version" type="text" value="0.1-alpha" />
+            </div>
+
+            <div class="form-field">
+              <label for="advanced-antenna-model">Antena virtual</label>
+              <input id="advanced-antenna-model" type="text" value="VIRTUAL_ADV_ANT" />
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <div class="form-field">
+              <label><input id="advanced-use-sp3" type="checkbox" checked /> Usar efemérides precisas (SP3)</label>
+            </div>
+            <div class="form-field">
+              <label><input id="advanced-use-clk" type="checkbox" /> Usar relógios precisos (CLK)</label>
+            </div>
+            <div class="form-field">
+              <label><input id="advanced-interpolate-code" type="checkbox" checked /> Interpolar observáveis de código</label>
+            </div>
+            <div class="form-field">
+              <label><input id="advanced-interpolate-phase" type="checkbox" /> Interpolar fase (experimental)</label>
+            </div>
+          </div>
+
+          <div class="job-actions">
+            <button id="advanced-process-btn" type="submit" class="btn btn-primary">
+              Processar modo avançado
+            </button>
+          </div>
+        </form>
+
+        <div id="advanced-message" class="message-box hidden"></div>
+      </section>
+
+      <section class="dashboard-card dashboard-card-full">
+        <div class="dashboard-head">
+          <div>
+            <span class="eyebrow">Debug</span>
+            <h3>Progresso avançado detalhado</h3>
+          </div>
+        </div>
+
+        <div class="ob-progress-wrap">
+          <div class="ob-progress-bar">
+            <div id="advanced-progress-bar" class="ob-progress-fill" style="width: 0%;"></div>
+          </div>
+          <div id="advanced-progress-percent" class="ob-progress-percent">0%</div>
+        </div>
+
+        <div id="advanced-progress-step" class="ob-modal-message">
+          Aguardando processamento...
+        </div>
+
+        <pre id="advanced-progress-detail" class="ob-modal-detail" style="white-space: pre-wrap;"></pre>
+      </section>
+    </div>
+  </main>
+
+
+<script src="./script_advanced.js?v=801"></script>
+</body>
+</html>

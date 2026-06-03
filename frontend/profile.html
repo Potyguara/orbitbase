@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OrbitBase | Perfil</title>
+  <link rel="stylesheet" href="./styles.css?v=706" />
+</head>
+<body class="dashboard-body">
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand">
+        <div class="brand-mark">O</div>
+        <div>
+          <h1>OrbitBase</h1>
+          <p>N. S. de Lima - Biome Projetos Ambientais</p>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button id="go-dashboard-btn" class="btn btn-outline" type="button">
+          Dashboard
+        </button>
+        <button id="go-advanced-btn" class="btn btn-outline" type="button">
+          Modo avançado
+        </button>
+        <button id="logout-btn" class="btn btn-outline" type="button">
+          Sair
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="section muted">
+    <div class="container dashboard-shell">
+      <section class="dashboard-card dashboard-card-full">
+        <div class="dashboard-head">
+          <div>
+            <span class="eyebrow">Conta</span>
+            <h3>Perfil do usuário</h3>
+            <p class="section-subtitle">
+              Configure suas credenciais Earthdata / CDDIS para o processamento avançado.
+            </p>
+          </div>
+        </div>
+
+        <div class="form-card">
+          <div class="form-section-title">Informações da conta</div>
+
+          <div class="form-grid">
+            <div class="form-field">
+              <label for="profile-name">Nome</label>
+              <input id="profile-name" type="text" disabled />
+            </div>
+
+            <div class="form-field">
+              <label for="profile-email">E-mail</label>
+              <input id="profile-email" type="text" disabled />
+            </div>
+
+            <div class="form-field">
+              <label for="profile-plan">Plano</label>
+              <input id="profile-plan" type="text" disabled />
+            </div>
+          </div>
+        </div>
+
+        <div class="form-card" style="margin-top:18px;">
+          <div class="form-section-title">Earthdata / CDDIS</div>
+
+          <div id="earthdata-status-box" class="message-box">
+            Carregando status das credenciais...
+          </div>
+
+          <div class="form-grid" style="margin-top:16px;">
+            <div class="form-field form-field-full">
+              <label for="earthdata-username">Usuário Earthdata</label>
+              <input
+                id="earthdata-username"
+                type="text"
+                placeholder="Seu usuário Earthdata"
+                autocomplete="username"
+              />
+            </div>
+
+            <div class="form-field form-field-full">
+              <label for="earthdata-password">Senha Earthdata</label>
+              <input
+                id="earthdata-password"
+                type="password"
+                placeholder="Sua senha Earthdata"
+                autocomplete="current-password"
+              />
+            </div>
+          </div>
+
+          <div class="job-actions" style="margin-top:18px;">
+            <button id="save-earthdata-btn" class="btn btn-primary" type="button">
+              Salvar credenciais
+            </button>
+
+            <button id="delete-earthdata-btn" class="btn btn-outline" type="button">
+              Remover credenciais
+            </button>
+          </div>
+
+          <div
+            id="earthdata-message-box"
+            class="message-box hidden"
+            style="margin-top:16px;"
+          ></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="./profile.js?v=706"></script>
+</body>
+</html>

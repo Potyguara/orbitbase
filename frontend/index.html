@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OrbitBase | Bases virtuais com precisão e agilidade</title>
+  <meta name="description" content="OrbitBase é uma plataforma web para geração de bases virtuais offline e exportação RINEX a partir de dados históricos de estações GNSS de referência." />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand">
+        <div class="brand-mark">O</div>
+        <div>
+          <h1>OrbitBase</h1>
+          <p>by N. S. de Lima - Biome Projetos Ambientais</p>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <a href="#beneficios">Benefícios</a>
+        <a href="#como-funciona">Como funciona</a>
+        <a href="./pricing.html">Planos</a>
+        <a href="#faq">FAQ</a>
+        <a href="./terms.html">Termos de Uso</a>
+        <a href="./methodology.html">Metodologia</a>
+        <a class="btn btn-outline" href="./auth.html">Entrar</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <span class="eyebrow">Plataforma GNSS para geração de base virtual offline</span>
+          <h2>Bases virtuais com precisão e agilidade</h2>
+          <p class="hero-text">
+            O OrbitBase é uma plataforma web voltada à geração de bases virtuais offline
+            e exportação RINEX a partir de dados históricos de estações GNSS de referência,
+            com foco em organização, automação e consistência técnica.
+          </p>
+
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="./auth.html">Criar conta</a>
+            <a class="btn btn-secondary" href="#como-funciona">Ver como funciona</a>
+          </div>
+
+          <div class="hero-note">
+            Uso inicial em <strong>siscond.online/orbit/</strong>
+          </div>
+        </div>
+
+        <div class="hero-card">
+          <div class="card">
+            <div class="card-header">
+              <span class="badge">Painel OrbitBase</span>
+            </div>
+            <div class="card-body">
+              <div class="metric-row">
+                <div class="metric">
+                  <strong>12</strong>
+                  <span>Sessões</span>
+                </div>
+                <div class="metric">
+                  <strong>438</strong>
+                  <span>Min. VRS</span>
+                </div>
+                <div class="metric">
+                  <strong>28</strong>
+                  <span>RINEX</span>
+                </div>
+              </div>
+
+              <div class="mini-table">
+                <div class="mini-row mini-head">
+                  <span>Job</span>
+                  <span>Status</span>
+                  <span>Tempo</span>
+                </div>
+                <div class="mini-row">
+                  <span>AP-120426-01</span>
+                  <span class="status done">Concluído</span>
+                  <span>45 min</span>
+                </div>
+                <div class="mini-row">
+                  <span>AP-120426-02</span>
+                  <span class="status running">Gerando</span>
+                  <span>20 min</span>
+                </div>
+                <div class="mini-row">
+                  <span>AP-120426-03</span>
+                  <span class="status queued">Fila</span>
+                  <span>--</span>
+                </div>
+              </div>
+
+              <div class="fake-chart">
+                <div class="bar h40"></div>
+                <div class="bar h70"></div>
+                <div class="bar h55"></div>
+                <div class="bar h90"></div>
+                <div class="bar h65"></div>
+                <div class="bar h80"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section muted" id="beneficios">
+      <div class="container">
+        <div class="section-head">
+          <span class="eyebrow">Benefícios</span>
+          <h3>Uma camada técnica sobre dados históricos GNSS</h3>
+          <p>
+            O OrbitBase automatiza etapas operacionais normalmente manuais, facilitando
+            a seleção de estações, a organização das sessões e a exportação em RINEX.
+          </p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature-card">
+            <h4>Seleção inteligente de estações</h4>
+            <p>Busca automática de estações GNSS compatíveis com a janela temporal e a área de interesse.</p>
+          </article>
+
+          <article class="feature-card">
+            <h4>Base virtual offline</h4>
+            <p>Geração orientada por critérios técnicos a partir de dados históricos de referência.</p>
+          </article>
+
+          <article class="feature-card">
+            <h4>Exportação RINEX</h4>
+            <p>Disponibilização do arquivo final em formato compatível com rotinas técnicas e pós-processamento.</p>
+          </article>
+
+          <article class="feature-card">
+            <h4>Painel de consumo</h4>
+            <p>Controle de minutos gerados, exportações realizadas e histórico por conta e projeto.</p>
+          </article>
+
+          <article class="feature-card">
+            <h4>Organização por projetos</h4>
+            <p>Centralização das sessões em ambiente web com rastreabilidade e controle operacional.</p>
+          </article>
+
+          <article class="feature-card">
+            <h4>Escalável</h4>
+            <p>Estrutura pensada para evoluir para múltiplos usuários, planos, relatórios e API.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="como-funciona">
+      <div class="container">
+        <div class="section-head">
+          <span class="eyebrow">Como funciona</span>
+          <h3>Fluxo simples para uma operação técnica complexa</h3>
+        </div>
+
+        <div class="steps">
+          <div class="step">
+            <div class="step-number">1</div>
+            <h4>Envie sua sessão</h4>
+            <p>Informe as coordenadas do local, janela temporal e a área de interesse.</p>
+          </div>
+
+          <div class="step">
+            <div class="step-number">2</div>
+            <h4>Selecione no mínimo 3 bases de referência no mapa</h4>
+            <p>O OrbitBase identifica estações de referência compatíveis para compor a base virtual.</p>
+          </div>
+
+          <div class="step">
+            <div class="step-number">3</div>
+            <h4>Geração da base virtual</h4>
+            <p>O job é processado e os minutos válidos gerados são registrados no painel do usuário.</p>
+          </div>
+
+          <div class="step">
+            <div class="step-number">4</div>
+            <h4>Exportação RINEX</h4>
+            <p>Ao final, o usuário baixa o arquivo exportado e acompanha os dados da sessão.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section muted" id="planos">
+      <div class="container">
+        <div class="section-head">
+          <span class="eyebrow">Planos</span>
+          <h3>Modelos de contratação do OrbitBase</h3>
+          <p>
+            O OrbitBase foi estruturado para atender desde usuários que desejam testar a
+            tecnologia até profissionais que precisam gerar bases virtuais offline para
+            pós-processamento de rovers reais com maior recorrência.
+          </p>
+        </div>
+
+        <div class="plans">
+          <article class="plan-card">
+            <span class="plan-tag">Teste gratuito</span>
+            <h4>Free</h4>
+            <div class="price">R$ 0</div>
+            <ul>
+              <li>50 minutos por mês</li>
+              <li>Geração de base virtual offline</li>
+              <li>Uso para avaliação técnica da plataforma</li>
+              <li>Histórico básico de jobs</li>
+            </ul>
+            <a class="btn btn-secondary full" href="./auth.html">Começar grátis</a>
+          </article>
+
+          <article class="plan-card featured">
+            <span class="plan-tag">Serviço avulso</span>
+            <h4>Sob Demanda</h4>
+            <div class="price">R$ 0,50<span>/min</span></div>
+            <ul>
+              <li>Cobrança por minuto efetivamente gerado</li>
+              <li>Sem necessidade de assinatura mensal</li>
+              <li>Ideal para demandas pontuais</li>
+              <li>Histórico de jobs e exportações</li>
+            </ul>
+            <a class="btn btn-primary full" href="./pricing.html">Ver contratação</a>
+          </article>
+
+          <article class="plan-card">
+            <span class="plan-tag">Assinatura</span>
+            <h4>Pro</h4>
+            <div class="price">R$ 99,90<span>/mês</span></div>
+            <ul>
+              <li>Uso recorrente por assinatura</li>
+              <li>Geração de base virtual offline</li>
+              <li>Pós-processamento de rovers reais</li>
+              <li>Histórico completo de jobs</li>
+            </ul>
+            <a class="btn btn-secondary full" href="./pricing.html">Conhecer plano</a>
+          </article>
+        </div>
+
+        <div style="margin-top: 20px;">
+          <p style="margin:0; color:#475569; font-size:0.98rem;">
+            <strong>Planejamento futuro:</strong> o OrbitBase poderá disponibilizar uma modalidade
+            avançada com rede VRS/NTRIP e posicionamento de bases virtuais em pontos definidos
+            pelo usuário, conforme evolução técnica e regulatória do serviço.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="faq">
+      <div class="container">
+        <div class="section-head">
+          <span class="eyebrow">FAQ</span>
+          <h3>Perguntas frequentes</h3>
+        </div>
+
+        <div class="faq-list">
+          <details class="faq-item">
+            <summary>O OrbitBase faz pós-processamento completo?</summary>
+            <p>
+              O foco principal da plataforma é a geração de base virtual offline em formato compatível
+              com fluxos técnicos de pós-processamento. O processamento final pode ser realizado em
+              softwares compatíveis adotados pelo usuário.
+            </p>
+          </details>
+
+          <details class="faq-item">
+            <summary>O sistema usa RBMC-IP em tempo real?</summary>
+            <p>
+              Não. Nesta fase, a plataforma trabalha com dados históricos e não opera com RBMC-IP.
+            </p>
+          </details>
+
+          <details class="faq-item">
+            <summary>O arquivo exportado pode ser usado em outros fluxos técnicos?</summary>
+            <p>
+              Sim. A proposta do OrbitBase é fornecer arquivos organizados para integração com rotinas
+              técnicas de pós-processamento GNSS, especialmente em levantamentos com rovers reais realizados em campo.
+            </p>
+          </details>
+
+          <details class="faq-item">
+            <summary>Como funciona a cobrança?</summary>
+            <p>
+              O OrbitBase poderá operar com três modalidades: uso gratuito limitado, contratação sob demanda
+              por minuto efetivamente gerado e assinatura mensal para uso recorrente da geração de base virtual offline.
+            </p>
+          </details>
+
+          <details class="faq-item">
+            <summary>Posso me cadastrar com Google?</summary>
+            <p>
+              A interface já está preparada para integração futura com login social Google.
+            </p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta-strip">
+      <div class="container cta-strip-inner">
+        <div>
+          <span class="eyebrow light">OrbitBase</span>
+          <h3>Comece a estruturar suas sessões GNSS em um ambiente web</h3>
+        </div>
+        <a class="btn btn-light" href="./auth.html">Criar conta</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-grid">
+      <div>
+        <h4>OrbitBase</h4>
+        <p>Plataforma web para geração de bases virtuais offline e exportação RINEX.</p>
+      </div>
+
+      <div>
+        <h5>Empresa</h5>
+        <p>N. S. de Lima - Biome Projetos Ambientais</p>
+      </div>
+
+      <div>
+        <h5>Acesso</h5>
+        <p><a href="./auth.html">Entrar ou criar conta</a></p>
+      </div>
+
+      <div>
+        <h5>Documentos</h5>
+        <p><a href="./pricing.html">Planos</a></p>
+        <p><a href="./terms.html">Termos de Uso</a></p>
+        <p><a href="./methodology.html">Metodologia</a></p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="./script.js?v=201"></script>
+</body>
+</html>

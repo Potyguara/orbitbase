@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OrbitBase | Metodologia Utilizada</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand">
+        <div class="brand-mark">O</div>
+        <div>
+          <h1>OrbitBase</h1>
+          <p>Metodologia Utilizada</p>
+        </div>
+      </div>
+      <nav class="nav">
+        <a href="./index.html">Início</a>
+        <a href="./terms.html">Termos</a>
+        <a class="btn btn-outline" href="./auth.html">Entrar</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page">
+    <div class="container legal">
+      <h2>Metodologia Utilizada</h2>
+      <p class="page-intro">
+        Esta página apresenta, em nível descritivo, a lógica operacional empregada pelo OrbitBase para geração de base virtual offline voltada ao pós-processamento GNSS.
+      </p>
+
+      <h3>1. Princípio geral</h3>
+      <p>
+        A metodologia parte da seleção de uma rede de estações GNSS de referência, sincronização temporal das observações, construção de um alvo virtual e síntese de observáveis para formação de uma base virtual de apoio ao pós-processamento.
+      </p>
+
+      <h3>2. Etapas do fluxo</h3>
+      <ol>
+        <li>seleção das estações candidatas;</li>
+        <li>resolução da rede principal;</li>
+        <li>compatibilização da janela temporal;</li>
+        <li>extração numérica dos observáveis;</li>
+        <li>injeção de geometria orbital por satélite e época;</li>
+        <li>interpolação espacial do comportamento da rede;</li>
+        <li>construção da base virtual;</li>
+        <li>sanitização, validação e exportação do produto final.</li>
+      </ol>
+
+      <h3>3. Formulação geométrica base</h3>
+      <p>
+        Para cada satélite e época útil, considera-se a diferença entre a distância geométrica do satélite à estação mestre e a distância geométrica do satélite ao alvo virtual:
+      </p>
+      <div class="formula">Δρ<sub>target</sub> = ρ<sub>target</sub> − ρ<sub>master</sub></div>
+
+      <p>
+        Para cada estação auxiliar, considera-se a diferença geométrica em relação à estação mestre:
+      </p>
+      <div class="formula">Δρ<sub>aux</sub> = ρ<sub>aux</sub> − ρ<sub>master</sub></div>
+
+      <h3>4. Resíduo interpolado da rede</h3>
+      <p>
+        A partir dos observáveis das auxiliares, estima-se um resíduo espacial relativo:
+      </p>
+      <div class="formula">r<sub>aux</sub> = (Obs<sub>aux</sub> − Obs<sub>master</sub>) − Δρ<sub>aux</sub></div>
+
+      <p>
+        Esse resíduo é interpolado ao alvo virtual por ponderação inversamente relacionada à distância:
+      </p>
+      <div class="formula">r<sub>interp</sub> = Σ(w<sub>i</sub> · r<sub>i</sub>) / Σw<sub>i</sub></div>
+      <div class="formula">w<sub>i</sub> = 1 / d<sub>i</sub><sup>p</sup></div>
+
+      <h3>5. Síntese do observável virtual</h3>
+      <p>
+        O observável final sintetizado para o alvo virtual é construído a partir da base mestre, do deslocamento geométrico explícito e do resíduo interpolado:
+      </p>
+      <div class="formula">Obs<sub>target</sub> = Obs<sub>master</sub> + Δρ<sub>target</sub> + α · r<sub>interp</sub></div>
+
+      <p>
+        Em versões de validação operacional, o processamento pode enfatizar observáveis de código para testar o deslocamento geométrico e a aderência da solução ao alvo.
+      </p>
+
+      <h3>6. Controle operacional</h3>
+      <p>
+        O fluxo inclui resumo de épocas, checagem de observáveis comuns, filtragem por sistema, produção de diagnósticos, validação estrutural do arquivo final e registro de metadados do processamento.
+      </p>
+
+      <h3>7. Escopo prático atual</h3>
+      <p>
+        O uso recomendado, na fase atual do produto, é a geração de base virtual offline para pós-processamento de rovers reais observados em campo, com conferência técnica posterior pelo usuário responsável.
+      </p>
+
+      <h3>8. Observação importante</h3>
+      <p>
+        Esta descrição é resumida e institucional. A implementação computacional interna do OrbitBase poderá evoluir ao longo do tempo, preservando a finalidade operacional do produto e seus mecanismos de controle técnico.
+      </p>
+    </div>
+  </main>
+</body>
+</html>
