@@ -140,6 +140,8 @@ if [ "$WEB" = "caddy-docker" ]; then
   COMPOSE+=(-f docker-compose.caddy.yml)
 fi
 "${COMPOSE[@]}" up -d --build --remove-orphans
+# Recarrega o nginx interno para pegar mudanças de config/frontend vindas do git.
+"${COMPOSE[@]}" restart web
 # Confere o conteúdo, não só o HTTP 200: garante que /api chega ao backend do OrbitBase.
 api_ok() { curl -fsS "http://127.0.0.1:$PORT/api/" 2>/dev/null | grep -q '"OrbitBase API"'; }
 for i in $(seq 1 30); do api_ok && break; sleep 2; done
