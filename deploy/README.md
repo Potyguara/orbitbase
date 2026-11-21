@@ -99,3 +99,9 @@ O rollback só remove arquivos `orbitbase*.conf`; o biomereurb não é tocado. E
 ## Acesso SSH
 
 Nunca use ou compartilhe a senha root. Para acesso remoto, adicione uma chave pública em hPanel → VPS → Chave SSH.
+
+## Backup e swap
+
+* `deploy/backup.sh` roda todo dia às 03:30 (`/etc/cron.d/orbitbase-backup`, log em `/var/log/orbitbase-backup.log`): copia o SQLite para `/root/orbitbase-backups/db/` (mantém 14 dias) e apaga pastas de `storage/processing` paradas há mais de 30 dias.
+* Restaurar: `cd /opt/orbitbase/deploy && docker compose stop backend && gunzip -c /root/orbitbase-backups/db/<arquivo>.db.gz > data/db/orbitbase.db && chown 1000:1000 data/db/orbitbase.db && docker compose start backend`.
+* Swap de 2 GB em `/swapfile` (em `/etc/fstab`), com `vm.swappiness=10`.
