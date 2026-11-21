@@ -279,11 +279,23 @@ def _is_dual_frequency_phase_usable(obs_map: dict[str, float | None]) -> bool:
 
 
 def _is_satellite_usable_for_writer(
+    sat_code: str,
     obs_map: dict[str, float | None],
     require_phase_observables: bool,
 ) -> bool:
+    sat_code = _normalize_satellite_code(sat_code)
+    if not sat_code:
+        return False
+
+    system = sat_code[:1]
+    if system not in {"G", "R", "E", "C", "J", "I", "S"}:
+        return False
+
     if require_phase_observables:
+        if system != "G":
+            return False
         return _is_dual_frequency_phase_usable(obs_map)
+
     return _is_code_only_usable(obs_map)
 
 
@@ -341,11 +353,24 @@ def write_advanced_rinex_from_seed(
     antenna_delta_hen: tuple[float, float, float] | None = None,
     interval_seconds: float | None = None,
     require_phase_observables: bool = True,
+    output_systems: list[str] | tuple[str, ...] | set[str] | None = None,
+    forced_obs_types: list[str] | None = None,
 ) -> str:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     raw_epochs = _extract_epochs_from_seed(advanced_seed)
+
+    if output_systems is None:
+        output_systems = ["G"] if require_phase_observables else ["G", "R"]
+
+    output_systems = {
+        str(sys).strip().upper() for sys in output_systems if str(sys).strip()
+    }
+
+    if not output_systems:
+        output_systems = {"G"} if require_phase_observables else {"G", "R"}
+
     if not raw_epochs:
         raise ValueError("advanced_seed não possui épocas para escrita do RINEX.")
 
@@ -363,7 +388,7 @@ def write_advanced_rinex_from_seed(
             if not sat_code:
                 continue
 
-            if not sat_code.startswith("G"):
+            if sat_code[:1] not in output_systems:
                 continue
 
             obs_map = _extract_obs_map(sat_item)
@@ -373,6 +398,7 @@ def write_advanced_rinex_from_seed(
             obs_map = _sanitize_obs_map_for_rinex_211(obs_map)
 
             if not _is_satellite_usable_for_writer(
+                sat_code=sat_code,
                 obs_map=obs_map,
                 require_phase_observables=require_phase_observables,
             ):
@@ -391,29 +417,35 @@ def write_advanced_rinex_from_seed(
                 "advanced_seed não possui satélites GPS com observáveis dual-frequency utilizáveis."
             )
         raise ValueError(
-            "advanced_seed não possui satélites GPS com observáveis de código utilizáveis."
+            "advanced_seed não possui satélites com observáveis de código utilizáveis."
         )
 
-    reference_obs_types = _filter_supported_obs_types(
-        _read_reference_obs_types(reference_rinex_path)
-    )
-
-    if reference_obs_types:
-        obs_types = [obs for obs in DEFAULT_OBS_TYPES if obs in reference_obs_types]
+    if forced_obs_types:
+        obs_types = [
+            str(obs).strip().upper()
+            for obs in forced_obs_types
+            if str(obs).strip().upper() in DEFAULT_OBS_TYPES
+        ]
     else:
-        discovered = _discover_obs_types(epoch_records)
-        obs_types = discovered if discovered else DEFAULT_OBS_TYPES[:]
+        reference_obs_types = _filter_supported_obs_types(
+            _read_reference_obs_types(reference_rinex_path)
+        )
 
-    if require_phase_observables:
-        essential_obs = ["C1", "P1", "L1", "C2", "P2", "L2"]
-    else:
+        if reference_obs_types:
+            obs_types = [obs for obs in DEFAULT_OBS_TYPES if obs in reference_obs_types]
+        else:
+            discovered = _discover_obs_types(epoch_records)
+            obs_types = discovered if discovered else DEFAULT_OBS_TYPES[:]
+
         essential_obs = ["C1", "P1", "C2", "P2"]
+        if require_phase_observables:
+            essential_obs = ["C1", "P1", "L1", "C2", "P2", "L2"]
 
-    for obs in essential_obs:
-        if obs not in obs_types:
-            obs_types.append(obs)
+        for obs in essential_obs:
+            if obs not in obs_types:
+                obs_types.append(obs)
 
-    obs_types = [obs for obs in DEFAULT_OBS_TYPES if obs in obs_types]
+        obs_types = [obs for obs in DEFAULT_OBS_TYPES if obs in obs_types]
 
     filtered_epoch_records: list[
         tuple[datetime, list[tuple[str, dict[str, float | None]]]]
@@ -426,6 +458,7 @@ def write_advanced_rinex_from_seed(
             filtered_map = {k: obs_map.get(k) for k in obs_types}
 
             if _is_satellite_usable_for_writer(
+                sat_code=sat_code,
                 obs_map=filtered_map,
                 require_phase_observables=require_phase_observables,
             ):
@@ -465,10 +498,19 @@ def write_advanced_rinex_from_seed(
     if interval_seconds is None:
         interval_seconds = _safe_float(advanced_seed.get("interval_seconds"), 1.0)
 
+    if require_phase_observables:
+        rinex_system = "G"
+    else:
+        rinex_system = "M" if len(output_systems) > 1 else next(iter(output_systems))
+
     print(f"[ADV-WRITER] epoch_records={len(epoch_records)}", flush=True)
     print(f"[ADV-WRITER] obs_types={obs_types}", flush=True)
     print(
         f"[ADV-WRITER] require_phase_observables={require_phase_observables}",
+        flush=True,
+    )
+    print(
+        f"[ADV-WRITER] output_systems={sorted(output_systems)}",
         flush=True,
     )
     print(
@@ -480,7 +522,7 @@ def write_advanced_rinex_from_seed(
 
     lines.append(
         _header_line(
-            "     2.11           OBSERVATION DATA    G",
+            f"     2.11           OBSERVATION DATA    {rinex_system}",
             "RINEX VERSION / TYPE",
         )
     )
@@ -534,9 +576,9 @@ def write_advanced_rinex_from_seed(
     lines.append(
         _header_line(
             (
-                "Advanced VRS PPP-safe GPS-only"
+                "Advanced VRS master-phase GPS-only"
                 if require_phase_observables
-                else "Advanced VRS code-only GPS-only"
+                else "Advanced VRS network-code compact"
             ),
             "COMMENT",
         )

@@ -3,14 +3,82 @@ from __future__ import annotations
 from bisect import bisect_left
 from datetime import datetime, timezone
 from math import sqrt
-from statistics import mean, median
+from statistics import median
 from typing import Any
 
-GPS_L1_WAVELENGTH_M = 0.190293672798365
-GPS_L2_WAVELENGTH_M = 0.244210213424568
+print(
+    f"[ADV-INT-MODULE] loaded={__file__}",
+    flush=True,
+)
+
+C_LIGHT = 299792458.0
+
+GPS_L1_HZ = 1575.42e6
+GPS_L2_HZ = 1227.60e6
 
 
-def _ensure_utc_datetime(value):
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _normalize_satellite_code(raw_code: Any) -> str | None:
+    if raw_code is None:
+        return None
+
+    code = str(raw_code).strip().upper()
+    if not code:
+        return None
+
+    code = code.replace(" ", "")
+
+    if len(code) >= 2 and code[0].isalpha():
+        system = code[0]
+        rest = "".join(ch for ch in code[1:] if ch.isdigit())
+        if system in {"G", "R", "E", "C", "J", "I", "S"} and rest:
+            try:
+                prn = int(rest)
+                return f"{system}{prn:02d}"
+            except Exception:
+                pass
+
+    if len(code) >= 2 and code[-1].isalpha():
+        system = code[-1]
+        rest = "".join(ch for ch in code[:-1] if ch.isdigit())
+        if system in {"G", "R", "E", "C", "J", "I", "S"} and rest:
+            try:
+                prn = int(rest)
+                return f"{system}{prn:02d}"
+            except Exception:
+                pass
+
+    return None
+
+
+def _extract_obs_values(obs_payload: Any) -> dict[str, float | None]:
+    if not isinstance(obs_payload, dict):
+        return {}
+
+    out: dict[str, float | None] = {}
+
+    for obs_code, raw_value in obs_payload.items():
+        if obs_code is None:
+            continue
+
+        code = str(obs_code).strip().upper()
+        if not code:
+            continue
+
+        out[code] = _safe_float(raw_value)
+
+    return out
+
+
+def _ensure_utc_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
 
@@ -19,1101 +87,923 @@ def _ensure_utc_datetime(value):
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
 
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
+    text = str(value).strip()
+    if not text:
+        return None
 
-        text = text.replace("Z", "+00:00")
+    text = text.replace("Z", "+00:00")
 
-        try:
-            dt = datetime.fromisoformat(text)
-        except Exception:
-            return None
-
-        if dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-
-    return None
-
-
-def _normalize_time_grid(time_grid: list[datetime]) -> list[datetime]:
-    normalized = []
-
-    for t in time_grid or []:
-        dt = _ensure_utc_datetime(t)
-        if dt is not None:
-            normalized.append(dt)
-
-    normalized.sort()
-    return normalized
-
-
-def _safe_float(value: Any, default: float | None = None) -> float | None:
     try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except Exception:
-        return default
-
-
-def _distance_xyz(
-    a: tuple[float, float, float], b: tuple[float, float, float]
-) -> float:
-    return sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
-
-
-def _range_to_satellite(
-    sat_geom: dict,
-    recv_xyz: tuple[float, float, float],
-) -> float | None:
-    try:
-        sx = float(sat_geom["x"])
-        sy = float(sat_geom["y"])
-        sz = float(sat_geom["z"])
-        rx, ry, rz = recv_xyz
-        return sqrt((sx - rx) ** 2 + (sy - ry) ** 2 + (sz - rz) ** 2)
+        dt = datetime.fromisoformat(text)
     except Exception:
         return None
 
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
 
-def _phase_cycles_to_meters(obs_code: str, value_cycles: float) -> float | None:
-    obs = (obs_code or "").strip().upper()
-
-    if obs == "L1":
-        return value_cycles * GPS_L1_WAVELENGTH_M
-
-    if obs == "L2":
-        return value_cycles * GPS_L2_WAVELENGTH_M
-
-    return None
+    return dt.astimezone(timezone.utc)
 
 
-def _phase_meters_to_cycles(obs_code: str, value_m: float) -> float | None:
-    obs = (obs_code or "").strip().upper()
-
-    if obs == "L1":
-        return value_m / GPS_L1_WAVELENGTH_M
-
-    if obs == "L2":
-        return value_m / GPS_L2_WAVELENGTH_M
-
-    return None
+def _epoch_to_iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _is_supported_satellite(sat: str) -> bool:
-    sat = (sat or "").strip().upper()
-    return len(sat) == 3 and sat.startswith("G") and sat[1:].isdigit()
+def _ecef_distance(
+    x1: float,
+    y1: float,
+    z1: float,
+    x2: float,
+    y2: float,
+    z2: float,
+) -> float:
+    return sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2)
 
 
-def _build_base_position_map(
-    base_numeric_data: list[dict],
-) -> dict[str, tuple[float, float, float]]:
-    out = {}
+def _geometric_range(
+    receiver_xyz: tuple[float, float, float],
+    sat_xyz: dict,
+) -> float | None:
+    rx, ry, rz = receiver_xyz
+    sx = _safe_float(sat_xyz.get("x"))
+    sy = _safe_float(sat_xyz.get("y"))
+    sz = _safe_float(sat_xyz.get("z"))
 
-    for base in base_numeric_data or []:
-        station = (base.get("station_code") or "").strip().upper()
-        if not station:
-            continue
+    if sx is None or sy is None or sz is None:
+        return None
 
-        x = base.get("approx_x")
-        y = base.get("approx_y")
-        z = base.get("approx_z")
-
-        if x is None or y is None or z is None:
-            continue
-
-        out[station] = (float(x), float(y), float(z))
-
-    return out
+    return _ecef_distance(rx, ry, rz, sx, sy, sz)
 
 
-def _inverse_distance_weights(
-    base_positions: dict[str, tuple[float, float, float]],
-    target_xyz: tuple[float, float, float],
-    stations: list[str],
-    power: float = 1.0,
-) -> dict[str, float]:
-    raw = {}
-
-    for st in stations:
-        pos = base_positions.get(st)
-        if not pos:
-            continue
-
-        d = _distance_xyz(pos, target_xyz)
-        raw[st] = 1.0 / max(d, 1.0) ** power
-
-    s = sum(raw.values())
-    if s <= 0:
-        return {}
-
-    return {k: v / s for k, v in raw.items()}
-
-
-def _build_base_satellite_series(
-    base_numeric_data: list[dict],
-) -> dict[str, dict[str, dict]]:
-    out: dict[str, dict[str, dict]] = {}
-
-    for base in base_numeric_data or []:
-        station = (base.get("station_code") or "").strip().upper()
-        if not station:
-            continue
-
-        station_map: dict[str, dict] = {}
-
-        for epoch in base.get("epochs", []) or []:
-            epoch_dt = _ensure_utc_datetime(
-                epoch.get("epoch") or epoch.get("epoch_utc")
-            )
-            if epoch_dt is None:
-                continue
-
-            satellites = (
-                epoch.get("satellites")
-                or epoch.get("observations")
-                or epoch.get("sats")
-                or []
-            )
-
-            if not isinstance(satellites, list):
-                continue
-
-            for sat_item in satellites:
-                if not isinstance(sat_item, dict):
-                    continue
-
-                sat = (
-                    sat_item.get("satellite")
-                    or sat_item.get("sat")
-                    or sat_item.get("prn")
-                    or ""
-                )
-                sat = str(sat).strip().upper()
-
-                if not _is_supported_satellite(sat):
-                    continue
-
-                obs_map = sat_item.get("observations") or sat_item.get("obs") or {}
-                if not isinstance(obs_map, dict) or not obs_map:
-                    continue
-
-                sat_series = station_map.setdefault(
-                    sat,
-                    {
-                        "times": [],
-                        "samples": [],
-                    },
-                )
-                sat_series["times"].append(epoch_dt)
-                sat_series["samples"].append(
-                    {
-                        "epoch": epoch_dt,
-                        "observations": dict(obs_map),
-                    }
-                )
-
-        for sat in station_map:
-            zipped = sorted(
-                zip(station_map[sat]["times"], station_map[sat]["samples"]),
-                key=lambda x: x[0],
-            )
-            station_map[sat]["times"] = [x[0] for x in zipped]
-            station_map[sat]["samples"] = [x[1] for x in zipped]
-
-        out[station] = station_map
-
-    return out
-
-
-def _get_geometry_epoch_map(geometry_cache: dict) -> dict[datetime, dict]:
-    out = {}
-
-    for item in geometry_cache.get("epochs", []) or []:
-        epoch_dt = _ensure_utc_datetime(item.get("epoch"))
-        if epoch_dt is None:
-            continue
-
-        satellites = item.get("satellites") or {}
-        if isinstance(satellites, dict):
-            sat_map = {}
-            for sat, payload in satellites.items():
-                sat = str(sat).strip().upper()
-                if _is_supported_satellite(sat) and isinstance(payload, dict):
-                    sat_map[sat] = payload
-            out[epoch_dt] = sat_map
-
-    return out
-
-
-def _estimate_native_interval_seconds(base_numeric_data: list[dict]) -> int:
-    deltas = []
+def _median_step_seconds(
+    base_numeric_data: list[dict], fallback: float = 15.0
+) -> float:
+    steps: list[float] = []
 
     for base in base_numeric_data or []:
         epochs = base.get("epochs") or []
-        if len(epochs) < 2:
-            continue
+        prev_dt: datetime | None = None
 
-        dts = []
-        for ep in epochs[:10]:
+        for ep in epochs:
             dt = _ensure_utc_datetime(ep.get("epoch") or ep.get("epoch_utc"))
-            if dt is not None:
-                dts.append(dt)
+            if dt is None:
+                continue
 
-        if len(dts) < 2:
-            continue
+            if prev_dt is not None:
+                step = (dt - prev_dt).total_seconds()
+                if step > 0:
+                    steps.append(step)
 
-        for i in range(1, len(dts)):
-            delta = (dts[i] - dts[i - 1]).total_seconds()
-            if delta > 0:
-                deltas.append(delta)
+            prev_dt = dt
 
-    if not deltas:
-        return 15
+    if not steps:
+        return float(fallback)
 
     try:
-        return max(1, int(round(median(deltas))))
+        return float(median(steps))
     except Exception:
-        return 15
+        return float(fallback)
 
 
-def _find_bracketing_samples(
-    series_times: list[datetime],
-    series_samples: list[dict],
-    target_epoch: datetime,
-    tolerance_seconds: float,
-) -> tuple[dict | None, dict | None]:
-    if not series_times or not series_samples:
-        return None, None
+def _build_geometry_epoch_map(geometry_cache: dict) -> dict[str, dict]:
+    out: dict[str, dict] = {}
 
-    idx = bisect_left(series_times, target_epoch)
+    for ep in geometry_cache.get("epochs") or []:
+        epoch_iso = ep.get("epoch")
+        sats = ep.get("satellites") or {}
+        if epoch_iso:
+            out[epoch_iso] = sats
 
-    prev_sample = None
-    next_sample = None
-
-    if idx > 0:
-        prev_candidate = series_samples[idx - 1]
-        prev_dt = _ensure_utc_datetime(prev_candidate.get("epoch"))
-        if prev_dt is not None:
-            if abs((target_epoch - prev_dt).total_seconds()) <= tolerance_seconds:
-                prev_sample = prev_candidate
-
-    if idx < len(series_times):
-        next_candidate = series_samples[idx]
-        next_dt = _ensure_utc_datetime(next_candidate.get("epoch"))
-        if next_dt is not None:
-            if abs((next_dt - target_epoch).total_seconds()) <= tolerance_seconds:
-                next_sample = next_candidate
-
-    if prev_sample is None and next_sample is None:
-        return None, None
-
-    return prev_sample, next_sample
+    return out
 
 
-def _find_nearest_sample(
-    series_times: list[datetime],
-    series_samples: list[dict],
-    target_epoch: datetime,
-    tolerance_seconds: float,
-) -> dict | None:
-    if not series_times or not series_samples:
-        return None
+def _extract_obs_map_from_epoch(
+    epoch_payload: dict,
+) -> dict[str, dict[str, float | None]]:
+    result: dict[str, dict[str, float | None]] = {}
 
-    idx = bisect_left(series_times, target_epoch)
-    candidates = []
+    if not isinstance(epoch_payload, dict):
+        return result
 
-    if idx > 0:
-        candidates.append(series_samples[idx - 1])
+    satellites_payload = epoch_payload.get("satellites")
 
-    if idx < len(series_samples):
-        candidates.append(series_samples[idx])
+    if isinstance(satellites_payload, list):
+        for item in satellites_payload:
+            if not isinstance(item, dict):
+                continue
 
-    best = None
-    best_abs = None
+            sat_code = _normalize_satellite_code(
+                item.get("satellite")
+                or item.get("sat")
+                or item.get("prn")
+                or item.get("sv")
+            )
+            if not sat_code:
+                continue
 
-    for sample in candidates:
-        dt = _ensure_utc_datetime(sample.get("epoch"))
-        if dt is None:
+            obs_map = _extract_obs_values(item.get("observations"))
+            if not obs_map:
+                continue
+
+            result[sat_code] = obs_map
+
+        return result
+
+    if isinstance(satellites_payload, dict):
+        for raw_sat, obs_payload in satellites_payload.items():
+            sat_code = _normalize_satellite_code(raw_sat)
+            if not sat_code:
+                continue
+
+            obs_map = _extract_obs_values(obs_payload)
+            if not obs_map:
+                continue
+
+            result[sat_code] = obs_map
+
+        return result
+
+    observations_payload = epoch_payload.get("observations")
+    if isinstance(observations_payload, dict):
+        for raw_sat, obs_payload in observations_payload.items():
+            sat_code = _normalize_satellite_code(raw_sat)
+            if not sat_code:
+                continue
+
+            obs_map = _extract_obs_values(obs_payload)
+            if not obs_map:
+                continue
+
+            result[sat_code] = obs_map
+
+    return result
+
+
+def _normalize_base_epochs(base_numeric_data: list[dict]) -> list[dict]:
+    normalized_bases: list[dict] = []
+
+    for idx_base, base in enumerate(base_numeric_data or []):
+        station_code = str(base.get("station_code") or "").strip().upper()
+        label = base.get("label")
+
+        bx = _safe_float(base.get("approx_x"))
+        by = _safe_float(base.get("approx_y"))
+        bz = _safe_float(base.get("approx_z"))
+
+        if bx is None or by is None or bz is None:
+            print(
+                f"[ADV-INT-NORM] skip base idx={idx_base} station={station_code} "
+                f"reason=missing_xyz approx_x={base.get('approx_x')} "
+                f"approx_y={base.get('approx_y')} approx_z={base.get('approx_z')}",
+                flush=True,
+            )
             continue
 
-        diff = abs((target_epoch - dt).total_seconds())
-        if diff > tolerance_seconds:
-            continue
+        epochs_in = base.get("epochs") or []
+        epochs_out: list[dict] = []
 
-        if best is None or diff < best_abs:
-            best = sample
-            best_abs = diff
+        for ep in epochs_in:
+            if not isinstance(ep, dict):
+                continue
 
-    return best
+            dt = _ensure_utc_datetime(ep.get("epoch") or ep.get("epoch_utc"))
+            if dt is None:
+                continue
 
+            obs_map = _extract_obs_map_from_epoch(ep)
+            if not obs_map:
+                continue
 
-def _interpolate_scalar_in_time(
-    prev_dt: datetime | None,
-    prev_val: float | None,
-    next_dt: datetime | None,
-    next_val: float | None,
-    target_dt: datetime,
-) -> float | None:
-    if prev_val is None and next_val is None:
-        return None
+            epochs_out.append(
+                {
+                    "epoch": dt,
+                    "epoch_iso": _epoch_to_iso(dt),
+                    "obs_map": obs_map,
+                }
+            )
 
-    if prev_val is not None and next_val is None:
-        return prev_val
+        epochs_out.sort(key=lambda item: item["epoch"])
 
-    if prev_val is None and next_val is not None:
-        return next_val
-
-    if prev_dt is None or next_dt is None:
-        return prev_val if prev_val is not None else next_val
-
-    if next_dt <= prev_dt:
-        return prev_val
-
-    total = (next_dt - prev_dt).total_seconds()
-    delta = (target_dt - prev_dt).total_seconds()
-    alpha = delta / total
-
-    return float(prev_val) + (float(next_val) - float(prev_val)) * alpha
-
-
-def _interpolate_observation_map_in_time(
-    prev_sample: dict | None,
-    next_sample: dict | None,
-    target_epoch: datetime,
-    obs_codes: list[str],
-) -> dict[str, float]:
-    out: dict[str, float] = {}
-
-    prev_dt = _ensure_utc_datetime(prev_sample.get("epoch")) if prev_sample else None
-    next_dt = _ensure_utc_datetime(next_sample.get("epoch")) if next_sample else None
-
-    prev_obs = (prev_sample or {}).get("observations") or {}
-    next_obs = (next_sample or {}).get("observations") or {}
-
-    for obs_code in obs_codes:
-        prev_val = prev_obs.get(obs_code)
-        next_val = next_obs.get(obs_code)
-
-        try:
-            prev_val = None if prev_val is None else float(prev_val)
-        except Exception:
-            prev_val = None
-
-        try:
-            next_val = None if next_val is None else float(next_val)
-        except Exception:
-            next_val = None
-
-        interp = _interpolate_scalar_in_time(
-            prev_dt=prev_dt,
-            prev_val=prev_val,
-            next_dt=next_dt,
-            next_val=next_val,
-            target_dt=target_epoch,
+        print(
+            f"[ADV-INT-NORM] base idx={idx_base} station={station_code} "
+            f"raw_epochs={len(epochs_in)} usable_epochs={len(epochs_out)}",
+            flush=True,
         )
 
-        if interp is not None:
-            out[obs_code] = interp
+        if epochs_out:
+            sample_sats = list(sorted(epochs_out[0]["obs_map"].keys()))[:12]
+            print(
+                f"[ADV-INT-NORM] base station={station_code} "
+                f"first_epoch={epochs_out[0]['epoch_iso']} "
+                f"last_epoch={epochs_out[-1]['epoch_iso']} "
+                f"sample_sats={sample_sats}",
+                flush=True,
+            )
 
-    return out
-
-
-def _extract_code_observations_conservative(
-    prev_sample: dict | None,
-    next_sample: dict | None,
-    target_epoch: datetime,
-) -> dict[str, float]:
-    code_obs = ["C1", "P1", "C2", "P2"]
-    return _interpolate_observation_map_in_time(
-        prev_sample=prev_sample,
-        next_sample=next_sample,
-        target_epoch=target_epoch,
-        obs_codes=code_obs,
-    )
-
-
-def _extract_phase_observations_conservative(
-    nearest_sample: dict | None,
-) -> dict[str, float]:
-    if nearest_sample is None:
-        return {}
-
-    obs = nearest_sample.get("observations") or {}
-    if not isinstance(obs, dict):
-        return {}
-
-    out = {}
-
-    for obs_code in ("L1", "L2"):
-        value = obs.get(obs_code)
-        try:
-            if value is not None:
-                out[obs_code] = float(value)
-        except Exception:
-            pass
-
-    return out
-
-
-def _extract_snr_observations_conservative(
-    nearest_sample: dict | None,
-) -> dict[str, float]:
-    if nearest_sample is None:
-        return {}
-
-    obs = nearest_sample.get("observations") or {}
-    if not isinstance(obs, dict):
-        return {}
-
-    out = {}
-
-    for obs_code in ("S1", "S2"):
-        value = obs.get(obs_code)
-        try:
-            if value is not None:
-                out[obs_code] = float(value)
-        except Exception:
-            pass
-
-    return out
-
-
-def _select_master_base(
-    base_items: list[dict],
-    target_xyz: tuple[float, float, float],
-    base_positions: dict[str, tuple[float, float, float]],
-) -> dict | None:
-    candidates = []
-
-    for item in base_items:
-        st = item.get("station_code")
-        pos = base_positions.get(st)
-        if pos is None:
+        if not epochs_out:
             continue
 
-        d = _distance_xyz(pos, target_xyz)
-        candidates.append((d, item))
+        normalized_bases.append(
+            {
+                "station_code": station_code,
+                "label": label,
+                "xyz": (bx, by, bz),
+                "epochs": epochs_out,
+                "epoch_datetimes": [item["epoch"] for item in epochs_out],
+            }
+        )
 
-    if not candidates:
+    print(
+        f"[ADV-INT-NORM] normalized_bases={len(normalized_bases)}",
+        flush=True,
+    )
+    return normalized_bases
+
+
+def _find_bracketing_epochs(
+    epoch_datetimes: list[datetime],
+    epochs: list[dict],
+    target_epoch: datetime,
+    max_gap_seconds: float,
+) -> tuple[dict | None, dict | None, float]:
+    if not epoch_datetimes:
+        return None, None, 0.0
+
+    idx = bisect_left(epoch_datetimes, target_epoch)
+
+    if idx < len(epoch_datetimes) and epoch_datetimes[idx] == target_epoch:
+        return epochs[idx], epochs[idx], 0.0
+
+    left = epochs[idx - 1] if idx > 0 else None
+    right = epochs[idx] if idx < len(epochs) else None
+
+    if left is None or right is None:
+        return None, None, 0.0
+
+    t0 = left["epoch"]
+    t1 = right["epoch"]
+
+    gap = (t1 - t0).total_seconds()
+    if gap <= 0 or gap > max_gap_seconds:
+        return None, None, 0.0
+
+    alpha = (target_epoch - t0).total_seconds() / gap
+    if alpha < 0.0 or alpha > 1.0:
+        return None, None, 0.0
+
+    return left, right, alpha
+
+
+def _interpolate_scalar(
+    v0: float | None, v1: float | None, alpha: float
+) -> float | None:
+    if v0 is None or v1 is None:
+        return None
+    return v0 + (v1 - v0) * alpha
+
+
+def _interpolate_observation_record(
+    rec0: dict,
+    rec1: dict,
+    alpha: float,
+    allow_phase: bool,
+) -> dict:
+    out: dict[str, float] = {}
+
+    for key in ("C1", "P1", "C2", "P2", "S1", "S2"):
+        value = _interpolate_scalar(
+            _safe_float(rec0.get(key)),
+            _safe_float(rec1.get(key)),
+            alpha,
+        )
+        if value is not None:
+            out[key] = value
+
+    if allow_phase:
+        for key in ("L1", "L2"):
+            value = _interpolate_scalar(
+                _safe_float(rec0.get(key)),
+                _safe_float(rec1.get(key)),
+                alpha,
+            )
+            if value is not None:
+                out[key] = value
+
+    return out
+
+
+def _gps_wavelength(obs_code: str) -> float | None:
+    if obs_code == "L1":
+        return C_LIGHT / GPS_L1_HZ
+    if obs_code == "L2":
+        return C_LIGHT / GPS_L2_HZ
+    return None
+
+
+def _transport_record_to_target(
+    sat: str,
+    interpolated_record: dict,
+    sat_xyz: dict,
+    base_xyz: tuple[float, float, float],
+    target_xyz: tuple[float, float, float],
+    allow_phase: bool,
+) -> dict:
+    rho_base = _geometric_range(base_xyz, sat_xyz)
+    rho_target = _geometric_range(target_xyz, sat_xyz)
+
+    if rho_base is None or rho_target is None:
+        return {}
+
+    delta_rho = rho_target - rho_base
+    system = sat[:1].upper()
+
+    out: dict[str, float] = {}
+
+    for key in ("C1", "P1", "C2", "P2"):
+        obs = _safe_float(interpolated_record.get(key))
+        if obs is not None:
+            out[key] = obs + delta_rho
+
+    for key in ("S1", "S2"):
+        obs = _safe_float(interpolated_record.get(key))
+        if obs is not None:
+            out[key] = obs
+
+    if allow_phase and system == "G":
+        for key in ("L1", "L2"):
+            cycles = _safe_float(interpolated_record.get(key))
+            if cycles is None:
+                continue
+
+            wavelength = _gps_wavelength(key)
+            if wavelength is None:
+                continue
+
+            meters = cycles * wavelength
+            transported_cycles = (meters + delta_rho) / wavelength
+            out[key] = transported_cycles
+
+    return out
+
+
+def _weighted_merge_records(weighted_records: list[tuple[float, dict]]) -> dict:
+    if not weighted_records:
+        return {}
+
+    sums: dict[str, float] = {}
+    weights: dict[str, float] = {}
+
+    for weight, record in weighted_records:
+        if weight <= 0.0:
+            continue
+
+        for key, value in record.items():
+            v = _safe_float(value)
+            if v is None:
+                continue
+
+            sums[key] = sums.get(key, 0.0) + weight * v
+            weights[key] = weights.get(key, 0.0) + weight
+
+    out = {}
+    for key, total in sums.items():
+        w = weights.get(key, 0.0)
+        if w > 0.0:
+            out[key] = total / w
+
+    return out
+
+
+def _base_weight(
+    base_xyz: tuple[float, float, float],
+    target_xyz: tuple[float, float, float],
+) -> float:
+    dist = _ecef_distance(
+        base_xyz[0],
+        base_xyz[1],
+        base_xyz[2],
+        target_xyz[0],
+        target_xyz[1],
+        target_xyz[2],
+    )
+    dist = max(dist, 1.0)
+    return 1.0 / dist
+
+
+def _obs_priority_has_code(record: dict) -> bool:
+    return any(_safe_float(record.get(k)) is not None for k in ("C1", "P1", "C2", "P2"))
+
+
+def _obs_has_dual_phase_gps(record: dict) -> bool:
+    has_l1_code = (
+        _safe_float(record.get("C1")) is not None
+        or _safe_float(record.get("P1")) is not None
+    )
+    has_l2_code = (
+        _safe_float(record.get("C2")) is not None
+        or _safe_float(record.get("P2")) is not None
+    )
+    has_l1_phase = _safe_float(record.get("L1")) is not None
+    has_l2_phase = _safe_float(record.get("L2")) is not None
+    return has_l1_code and has_l2_code and has_l1_phase and has_l2_phase
+
+
+def _count_base_quality(base: dict) -> tuple[int, int]:
+    gps_dual_phase_obs = 0
+    gps_code_obs = 0
+
+    for ep in base.get("epochs") or []:
+        obs_map = ep.get("obs_map") or {}
+        for sat, rec in obs_map.items():
+            if not str(sat).startswith("G"):
+                continue
+            if _obs_priority_has_code(rec):
+                gps_code_obs += 1
+            if _obs_has_dual_phase_gps(rec):
+                gps_dual_phase_obs += 1
+
+    return gps_dual_phase_obs, gps_code_obs
+
+
+def _choose_master_base(normalized_bases: list[dict]) -> dict | None:
+    if not normalized_bases:
         return None
 
-    candidates.sort(key=lambda x: x[0])
-    return candidates[0][1]
+    ranked = []
+    for base in normalized_bases:
+        gps_dual_phase_obs, gps_code_obs = _count_base_quality(base)
+        print(
+            f"[ADV-INT-MASTER] station={base.get('station_code')} "
+            f"gps_dual_phase_obs={gps_dual_phase_obs} gps_code_obs={gps_code_obs}",
+            flush=True,
+        )
+        ranked.append(
+            (
+                gps_dual_phase_obs,
+                gps_code_obs,
+                len(base.get("epochs") or []),
+                base.get("station_code") or "",
+                base,
+            )
+        )
+
+    ranked.sort(key=lambda item: (item[0], item[1], item[2], item[3]), reverse=True)
+    return ranked[0][4] if ranked else None
 
 
-def _mad(values: list[float]) -> float:
-    if not values:
-        return 0.0
-    med = median(values)
-    return median([abs(v - med) for v in values])
+def _build_master_time_grid(master_base: dict) -> list[datetime]:
+    return [
+        ep["epoch"]
+        for ep in (master_base.get("epochs") or [])
+        if ep.get("epoch") is not None
+    ]
 
 
-def _robust_delta_from_master(
-    base_items: list[dict],
-    obs_code: str,
-    master_station: str,
+def _allowed_systems_from_config(config: dict, phase_mode: bool) -> set[str]:
+    output_profile = config.get("output_profile") or {}
+    allowed = output_profile.get("allowed_systems")
+
+    if isinstance(allowed, (list, tuple, set)):
+        normalized = {
+            str(item).strip().upper() for item in allowed if str(item).strip()
+        }
+        if normalized:
+            return normalized
+
+    return {"G"} if phase_mode else {"G", "R"}
+
+
+def _build_output_epochs_phase_mode(
+    master_base: dict,
+    geometry_epoch_map: dict[str, dict],
     target_xyz: tuple[float, float, float],
-    base_positions: dict[str, tuple[float, float, float]],
-    max_abs_delta: float,
-    dispersion_limit: float,
-) -> tuple[float, dict]:
-    master_res = None
-    weighted_deltas = []
-
-    for item in base_items:
-        st = item.get("station_code")
-        res = item.get("residuals", {}).get(obs_code)
-        if st is None or res is None:
-            continue
-
-        if st == master_station:
-            master_res = float(res)
-
-    if master_res is None:
-        return 0.0, {
-            "usable_count": 0,
-            "dispersion_mad": None,
-            "fallback_master_only": True,
-        }
-
-    usable_stations = []
-
-    for item in base_items:
-        st = item.get("station_code")
-        if st is None or st == master_station:
-            continue
-
-        res = item.get("residuals", {}).get(obs_code)
-        if res is None:
-            continue
-
-        delta = float(res) - master_res
-        usable_stations.append(st)
-        weighted_deltas.append((st, delta))
-
-    if not weighted_deltas:
-        return 0.0, {
-            "usable_count": 0,
-            "dispersion_mad": 0.0,
-            "fallback_master_only": True,
-        }
-
-    dispersion = _mad([d for _, d in weighted_deltas])
-
-    if dispersion > dispersion_limit:
-        return 0.0, {
-            "usable_count": len(weighted_deltas),
-            "dispersion_mad": dispersion,
-            "fallback_master_only": True,
-        }
-
-    weights = _inverse_distance_weights(
-        base_positions=base_positions,
-        target_xyz=target_xyz,
-        stations=usable_stations,
-        power=1.0,
-    )
-    if not weights:
-        return 0.0, {
-            "usable_count": len(weighted_deltas),
-            "dispersion_mad": dispersion,
-            "fallback_master_only": True,
-        }
-
-    num = 0.0
-    den = 0.0
-
-    for st, delta in weighted_deltas:
-        w = weights.get(st)
-        if w is None:
-            continue
-        num += w * delta
-        den += w
-
-    if den <= 0:
-        return 0.0, {
-            "usable_count": len(weighted_deltas),
-            "dispersion_mad": dispersion,
-            "fallback_master_only": True,
-        }
-
-    correction = num / den
-
-    if correction > max_abs_delta:
-        correction = max_abs_delta
-    elif correction < -max_abs_delta:
-        correction = -max_abs_delta
-
-    return correction, {
-        "usable_count": len(weighted_deltas),
-        "dispersion_mad": dispersion,
-        "fallback_master_only": False,
-    }
-
-
-def _build_conservative_observation_set(
-    sat: str,
-    base_items: list[dict],
-    target_xyz: tuple[float, float, float],
-    base_positions: dict[str, tuple[float, float, float]],
-    interpolate_code: bool,
-    interpolate_phase: bool,
-    interpolate_snr: bool,
-) -> tuple[dict[str, float], dict]:
-    out_obs: dict[str, float] = {}
-    debug: dict[str, Any] = {
-        "satellite": sat,
-        "master_station": None,
-        "code_debug": {},
-        "phase_debug": {},
-        "snr_debug": {},
-    }
-
-    if not base_items:
-        return out_obs, debug
-
-    master_item = _select_master_base(
-        base_items=base_items,
-        target_xyz=target_xyz,
-        base_positions=base_positions,
-    )
-    if master_item is None:
-        return out_obs, debug
-
-    master_station = master_item["station_code"]
-    rho_target = float(master_item["rho_target"])
-    debug["master_station"] = master_station
-
-    code_obs = ["C1", "P1", "C2", "P2"]
-    phase_obs = ["L1", "L2"]
-    snr_obs = ["S1", "S2"]
-
-    if interpolate_code:
-        for obs_code in code_obs:
-            master_res = master_item["residuals"].get(obs_code)
-            if master_res is None:
-                continue
-
-            correction, corr_debug = _robust_delta_from_master(
-                base_items=base_items,
-                obs_code=obs_code,
-                master_station=master_station,
-                target_xyz=target_xyz,
-                base_positions=base_positions,
-                max_abs_delta=2.0,
-                dispersion_limit=8.0,
-            )
-
-            out_obs[obs_code] = rho_target + float(master_res) + correction
-            debug["code_debug"][obs_code] = corr_debug
-
-    if interpolate_phase:
-        for obs_code in phase_obs:
-            master_res = master_item["residuals"].get(obs_code)
-            if master_res is None:
-                continue
-
-            correction, corr_debug = _robust_delta_from_master(
-                base_items=base_items,
-                obs_code=obs_code,
-                master_station=master_station,
-                target_xyz=target_xyz,
-                base_positions=base_positions,
-                max_abs_delta=0.08,
-                dispersion_limit=0.25,
-            )
-
-            phase_target_m = rho_target + float(master_res) + correction
-            phase_cycles = _phase_meters_to_cycles(obs_code, phase_target_m)
-
-            if phase_cycles is not None:
-                out_obs[obs_code] = phase_cycles
-                debug["phase_debug"][obs_code] = corr_debug
-
-    if interpolate_snr:
-        for obs_code in snr_obs:
-            vals = []
-            stations = []
-
-            for item in base_items:
-                st = item["station_code"]
-                val = item["residuals"].get(obs_code)
-                if val is None:
-                    continue
-                vals.append((st, float(val)))
-                stations.append(st)
-
-            if not vals:
-                continue
-
-            weights = _inverse_distance_weights(
-                base_positions=base_positions,
-                target_xyz=target_xyz,
-                stations=stations,
-                power=1.0,
-            )
-            if not weights:
-                continue
-
-            num = 0.0
-            den = 0.0
-            for st, val in vals:
-                w = weights.get(st)
-                if w is None:
-                    continue
-                num += w * val
-                den += w
-
-            if den > 0:
-                out_obs[obs_code] = num / den
-                debug["snr_debug"][obs_code] = {
-                    "usable_count": len(vals),
-                    "weighted": True,
-                }
-
-    return out_obs, debug
-
-
-def _filter_epoch_observations_conservative(
-    virtual_epochs: list[dict],
     min_satellites_per_epoch: int,
-    interpolate_code: bool,
-    interpolate_phase: bool,
-) -> list[dict]:
-    filtered = []
+) -> tuple[list[dict], int]:
+    output_epochs: list[dict] = []
+    epochs_skipped = 0
 
-    for epoch in virtual_epochs:
-        sats = epoch.get("observations") or []
-        new_sats = []
+    master_xyz = master_base["xyz"]
+    master_epochs = master_base.get("epochs") or []
 
-        for sat_item in sats:
-            sat = str(sat_item.get("satellite") or "").strip().upper()
-            if not _is_supported_satellite(sat):
+    for idx_epoch, ep in enumerate(master_epochs):
+        target_epoch = ep["epoch"]
+        epoch_iso = ep["epoch_iso"]
+        sat_geometry = geometry_epoch_map.get(epoch_iso) or {}
+
+        if idx_epoch < 3:
+            print(
+                f"[ADV-INT-EPOCH] idx={idx_epoch} target={epoch_iso} sat_geometry_count={len(sat_geometry)}",
+                flush=True,
+            )
+
+        if not sat_geometry:
+            epochs_skipped += 1
+            continue
+
+        obs_map = ep.get("obs_map") or {}
+        epoch_observations = []
+
+        for sat, rec in sorted(obs_map.items()):
+            if not str(sat).startswith("G"):
                 continue
 
-            obs = sat_item.get("observations") or {}
-            if not isinstance(obs, dict):
+            if sat not in sat_geometry:
                 continue
 
-            has_code_l1 = any(k in obs for k in ("C1", "P1"))
-            has_code_l2 = any(k in obs for k in ("C2", "P2"))
-            has_any_code = has_code_l1 or has_code_l2
-            has_phase = any(k in obs for k in ("L1", "L2"))
+            if not _obs_has_dual_phase_gps(rec):
+                continue
 
-            if interpolate_phase:
-                if not has_any_code:
-                    continue
-                if not has_phase:
-                    continue
-            else:
-                if not has_any_code:
-                    continue
+            transported = _transport_record_to_target(
+                sat=sat,
+                interpolated_record=rec,
+                sat_xyz=sat_geometry[sat],
+                base_xyz=master_xyz,
+                target_xyz=target_xyz,
+                allow_phase=True,
+            )
 
-            new_sats.append(
+            if not transported:
+                continue
+
+            if not _obs_has_dual_phase_gps(transported):
+                continue
+
+            epoch_observations.append(
                 {
                     "satellite": sat,
-                    "observations": obs,
+                    **transported,
                 }
             )
 
-        new_sats.sort(key=lambda x: x["satellite"])
+        if idx_epoch < 3:
+            print(
+                f"[ADV-INT-EPOCH] idx={idx_epoch} target={epoch_iso} "
+                f"epoch_observations={len(epoch_observations)} "
+                f"sats={[item['satellite'] for item in epoch_observations[:12]]}",
+                flush=True,
+            )
 
-        if len(new_sats) >= min_satellites_per_epoch:
-            filtered.append(
+        if len(epoch_observations) < min_satellites_per_epoch:
+            epochs_skipped += 1
+            continue
+
+        output_epochs.append(
+            {
+                "epoch": epoch_iso,
+                "observations": epoch_observations,
+                "satellite_count": len(epoch_observations),
+            }
+        )
+
+    return output_epochs, epochs_skipped
+
+
+def _build_output_epochs_code_mode(
+    normalized_time_grid: list[datetime],
+    normalized_bases: list[dict],
+    geometry_epoch_map: dict[str, dict],
+    target_xyz: tuple[float, float, float],
+    max_gap_seconds: float,
+    min_satellites_per_epoch: int,
+    allowed_systems: set[str],
+) -> tuple[list[dict], int]:
+    output_epochs: list[dict] = []
+    epochs_skipped = 0
+
+    for idx_epoch, target_epoch in enumerate(normalized_time_grid):
+        epoch_iso = _epoch_to_iso(target_epoch)
+        sat_geometry = geometry_epoch_map.get(epoch_iso) or {}
+
+        if idx_epoch < 3:
+            print(
+                f"[ADV-INT-EPOCH] idx={idx_epoch} target={epoch_iso} sat_geometry_count={len(sat_geometry)}",
+                flush=True,
+            )
+
+        if not sat_geometry:
+            epochs_skipped += 1
+            continue
+
+        epoch_observations = []
+
+        for sat, sat_xyz in sat_geometry.items():
+            sat = str(sat).strip().upper()
+            if not sat or sat[:1] not in allowed_systems:
+                continue
+
+            per_base_weighted_records: list[tuple[float, dict]] = []
+
+            for base in normalized_bases:
+                left_ep, right_ep, alpha = _find_bracketing_epochs(
+                    epoch_datetimes=base["epoch_datetimes"],
+                    epochs=base["epochs"],
+                    target_epoch=target_epoch,
+                    max_gap_seconds=max_gap_seconds,
+                )
+
+                if left_ep is None or right_ep is None:
+                    continue
+
+                rec0 = left_ep["obs_map"].get(sat)
+                rec1 = right_ep["obs_map"].get(sat)
+
+                if rec0 is None or rec1 is None:
+                    continue
+
+                interpolated_record = _interpolate_observation_record(
+                    rec0=rec0,
+                    rec1=rec1,
+                    alpha=alpha,
+                    allow_phase=False,
+                )
+
+                if not _obs_priority_has_code(interpolated_record):
+                    continue
+
+                transported = _transport_record_to_target(
+                    sat=sat,
+                    interpolated_record=interpolated_record,
+                    sat_xyz=sat_xyz,
+                    base_xyz=base["xyz"],
+                    target_xyz=target_xyz,
+                    allow_phase=False,
+                )
+
+                if not transported or not _obs_priority_has_code(transported):
+                    continue
+
+                weight = _base_weight(base["xyz"], target_xyz)
+                per_base_weighted_records.append((weight, transported))
+
+            merged = _weighted_merge_records(per_base_weighted_records)
+            if not merged or not _obs_priority_has_code(merged):
+                continue
+
+            epoch_observations.append(
                 {
-                    "epoch": epoch["epoch"],
-                    "satellite_count": len(new_sats),
-                    "observations": new_sats,
-                    "debug": epoch.get("debug"),
+                    "satellite": sat,
+                    **merged,
                 }
             )
 
-    return filtered
+        epoch_observations.sort(key=lambda item: item["satellite"])
 
+        if idx_epoch < 3:
+            print(
+                f"[ADV-INT-EPOCH] idx={idx_epoch} target={epoch_iso} "
+                f"epoch_observations={len(epoch_observations)} "
+                f"sats={[item['satellite'] for item in epoch_observations[:12]]}",
+                flush=True,
+            )
 
-def _decimate_virtual_epochs(
-    virtual_epochs: list[dict],
-    output_step_seconds: int,
-) -> list[dict]:
-    if output_step_seconds <= 1:
-        return virtual_epochs
-
-    if not virtual_epochs:
-        return virtual_epochs
-
-    first_dt = _ensure_utc_datetime(virtual_epochs[0].get("epoch"))
-    if first_dt is None:
-        return virtual_epochs
-
-    out = []
-
-    for epoch in virtual_epochs:
-        epoch_dt = _ensure_utc_datetime(epoch.get("epoch"))
-        if epoch_dt is None:
+        if len(epoch_observations) < min_satellites_per_epoch:
+            epochs_skipped += 1
             continue
 
-        delta = (epoch_dt - first_dt).total_seconds()
-        if delta < 0:
-            continue
+        output_epochs.append(
+            {
+                "epoch": epoch_iso,
+                "observations": epoch_observations,
+                "satellite_count": len(epoch_observations),
+            }
+        )
 
-        if int(round(delta)) % output_step_seconds == 0:
-            out.append(epoch)
-
-    return out
+    return output_epochs, epochs_skipped
 
 
 def interpolate_advanced_observations(
-    time_grid: list[datetime],
+    time_grid: list,
     base_numeric_data: list[dict],
     geometry_cache: dict,
     config: dict,
 ) -> dict:
-    normalized_time_grid = _normalize_time_grid(time_grid)
+    try:
+        requested_time_grid = []
+        for t in time_grid or []:
+            dt = _ensure_utc_datetime(t)
+            if dt is not None:
+                requested_time_grid.append(dt)
 
-    target_xyz = (
-        float(config.get("target_x", 0.0)),
-        float(config.get("target_y", 0.0)),
-        float(config.get("target_z", 0.0)),
-    )
+        requested_time_grid.sort()
 
-    min_common_bases = int(config.get("min_common_bases", 3) or 3)
-    min_satellites_per_epoch = int(config.get("min_satellites_per_epoch", 4) or 4)
+        print(
+            f"[ADV-INT] normalized_time_grid={len(requested_time_grid)}",
+            flush=True,
+        )
 
-    interpolate_code = bool(config.get("interpolate_code_observables", True))
-    interpolate_phase = bool(config.get("interpolate_phase_observables", True))
-    interpolate_snr = bool(config.get("interpolate_snr", False))
+        if requested_time_grid:
+            print(
+                f"[ADV-INT] first_target={_epoch_to_iso(requested_time_grid[0])} "
+                f"last_target={_epoch_to_iso(requested_time_grid[-1])}",
+                flush=True,
+            )
 
-    tolerance_seconds = float(config.get("max_interpolation_gap_seconds", 30) or 30)
+        if not requested_time_grid:
+            return {
+                "status": "failed",
+                "message": "Time grid vazio.",
+                "epochs_generated": 0,
+                "epochs_skipped": 0,
+                "interval_seconds": float(config.get("target_step_seconds", 1) or 1),
+                "epochs": [],
+                "summary": {},
+            }
 
-    internal_step_seconds = int(config.get("target_step_seconds", 1) or 1)
-    native_interval_seconds = _estimate_native_interval_seconds(base_numeric_data)
+        target_x = _safe_float(config.get("target_x"))
+        target_y = _safe_float(config.get("target_y"))
+        target_z = _safe_float(config.get("target_z"))
 
-    configured_output_step = config.get("output_step_seconds")
-    if configured_output_step is None:
-        output_step_seconds = native_interval_seconds
-    else:
-        output_step_seconds = int(configured_output_step or native_interval_seconds)
+        print(
+            f"[ADV-INT] target_xyz_raw=({target_x}, {target_y}, {target_z})",
+            flush=True,
+        )
 
-    if output_step_seconds < 1:
-        output_step_seconds = native_interval_seconds
+        if target_x is None or target_y is None or target_z is None:
+            return {
+                "status": "failed",
+                "message": "Configuração do alvo sem target_x/target_y/target_z.",
+                "epochs_generated": 0,
+                "epochs_skipped": 0,
+                "interval_seconds": float(config.get("target_step_seconds", 1) or 1),
+                "epochs": [],
+                "summary": {},
+            }
 
-    phase_tolerance_seconds = min(
-        max(1.0, native_interval_seconds * 0.25),
-        tolerance_seconds,
-    )
+        target_xyz = (target_x, target_y, target_z)
 
-    code_tolerance_seconds = tolerance_seconds
+        geometry_epoch_map = _build_geometry_epoch_map(geometry_cache)
+        normalized_bases = _normalize_base_epochs(base_numeric_data)
 
-    base_positions = _build_base_position_map(base_numeric_data)
-    base_series = _build_base_satellite_series(base_numeric_data)
-    geometry_epoch_map = _get_geometry_epoch_map(geometry_cache)
+        print(
+            f"[ADV-INT] geometry_epochs={len(geometry_epoch_map)} normalized_bases={len(normalized_bases)}",
+            flush=True,
+        )
 
-    print(
-        f"[ADV-INT] normalized_time_grid={len(normalized_time_grid)} "
-        f"usable_bases={len(base_positions)} "
-        f"target_xyz={target_xyz} "
-        f"internal_step={internal_step_seconds} "
-        f"native_interval={native_interval_seconds} "
-        f"output_step={output_step_seconds} "
-        f"phase_tolerance={phase_tolerance_seconds}",
-        flush=True,
-    )
+        if geometry_epoch_map:
+            geom_keys = sorted(geometry_epoch_map.keys())
+            print(
+                f"[ADV-INT] geometry_first={geom_keys[0]} geometry_last={geom_keys[-1]}",
+                flush=True,
+            )
+            first_sats = list(
+                sorted((geometry_epoch_map.get(geom_keys[0]) or {}).keys())
+            )[:12]
+            print(
+                f"[ADV-INT] geometry_sample_sats={first_sats}",
+                flush=True,
+            )
 
-    virtual_epochs_raw = []
-    debug_epochs = []
+        if not normalized_bases:
+            return {
+                "status": "failed",
+                "message": "Nenhuma base normalizada com épocas observacionais válidas.",
+                "epochs_generated": 0,
+                "epochs_skipped": 0,
+                "interval_seconds": float(config.get("target_step_seconds", 1) or 1),
+                "epochs": [],
+                "summary": {},
+            }
 
-    for target_epoch in normalized_time_grid:
-        epoch_geometry = geometry_epoch_map.get(target_epoch, {})
-        sat_base_residuals: dict[str, list[dict]] = {}
-        bases_at_epoch_debug = []
+        native_interval = _median_step_seconds(base_numeric_data, fallback=15.0)
+        phase_mode = bool(config.get("interpolate_phase_observables", False))
+        min_satellites_per_epoch = int(config.get("min_satellites_per_epoch", 4) or 4)
+        max_gap_seconds = float(
+            config.get(
+                "max_interpolation_gap_seconds",
+                max(30.0, native_interval * 2.5),
+            )
+        )
+        allowed_systems = _allowed_systems_from_config(config, phase_mode=phase_mode)
 
-        for station, sat_series in base_series.items():
-            base_xyz = base_positions.get(station)
-            if base_xyz is None:
-                continue
+        effective_real_epochs = min(len(b["epochs"]) for b in normalized_bases)
 
-            base_sat_count = 0
-
-            for sat, sat_payload in sat_series.items():
-                if not _is_supported_satellite(sat):
-                    continue
-
-                sat_geom = epoch_geometry.get(sat)
-                if sat_geom is None:
-                    continue
-
-                rho_base = _range_to_satellite(sat_geom, base_xyz)
-                rho_target = _range_to_satellite(sat_geom, target_xyz)
-                if rho_base is None or rho_target is None:
-                    continue
-
-                prev_sample, next_sample = _find_bracketing_samples(
-                    series_times=sat_payload["times"],
-                    series_samples=sat_payload["samples"],
-                    target_epoch=target_epoch,
-                    tolerance_seconds=code_tolerance_seconds,
-                )
-
-                nearest_phase_sample = _find_nearest_sample(
-                    series_times=sat_payload["times"],
-                    series_samples=sat_payload["samples"],
-                    target_epoch=target_epoch,
-                    tolerance_seconds=phase_tolerance_seconds,
-                )
-
-                residuals = {}
-
-                if interpolate_code:
-                    code_obs = _extract_code_observations_conservative(
-                        prev_sample=prev_sample,
-                        next_sample=next_sample,
-                        target_epoch=target_epoch,
-                    )
-
-                    for obs_code in ("C1", "P1", "C2", "P2"):
-                        value = code_obs.get(obs_code)
-                        if value is None:
-                            continue
-                        residuals[obs_code] = float(value) - rho_base
-
-                if interpolate_phase:
-                    phase_obs = _extract_phase_observations_conservative(
-                        nearest_sample=nearest_phase_sample
-                    )
-
-                    for obs_code in ("L1", "L2"):
-                        value_cycles = phase_obs.get(obs_code)
-                        if value_cycles is None:
-                            continue
-
-                        value_m = _phase_cycles_to_meters(obs_code, float(value_cycles))
-                        if value_m is None:
-                            continue
-
-                        residuals[obs_code] = value_m - rho_base
-
-                if interpolate_snr:
-                    snr_obs = _extract_snr_observations_conservative(
-                        nearest_sample=nearest_phase_sample
-                    )
-
-                    for obs_code in ("S1", "S2"):
-                        value = snr_obs.get(obs_code)
-                        if value is None:
-                            continue
-                        residuals[obs_code] = float(value)
-
-                if not residuals:
-                    continue
-
-                sat_base_residuals.setdefault(sat, []).append(
-                    {
-                        "station_code": station,
-                        "rho_target": rho_target,
-                        "rho_base": rho_base,
-                        "residuals": residuals,
-                    }
-                )
-                base_sat_count += 1
-
-            bases_at_epoch_debug.append(
-                {
-                    "station_code": station,
-                    "satellite_count": base_sat_count,
+        if phase_mode:
+            master_base = _choose_master_base(normalized_bases)
+            if master_base is None:
+                return {
+                    "status": "failed",
+                    "message": "Não foi possível selecionar base-mestra para o modo com fase.",
+                    "epochs_generated": 0,
+                    "epochs_skipped": 0,
+                    "interval_seconds": native_interval,
+                    "epochs": [],
+                    "summary": {},
                 }
+
+            normalized_time_grid = _build_master_time_grid(master_base)
+            output_step_seconds = native_interval
+
+            print(
+                f"[ADV-INT] requested_time_grid={len(requested_time_grid)} "
+                f"effective_real_epochs={effective_real_epochs} "
+                f"usable_bases={len(normalized_bases)} "
+                f"target_xyz={target_xyz} internal_step={output_step_seconds:g} "
+                f"native_interval={native_interval:g} output_step={output_step_seconds:g}",
+                flush=True,
             )
 
-        virtual_satellites = []
-        epoch_sat_debug = []
-
-        for sat, base_items in sat_base_residuals.items():
-            stations = sorted({item["station_code"] for item in base_items})
-            if len(stations) < min_common_bases:
-                continue
-
-            out_obs, sat_debug = _build_conservative_observation_set(
-                sat=sat,
-                base_items=base_items,
+            output_epochs, epochs_skipped = _build_output_epochs_phase_mode(
+                master_base=master_base,
+                geometry_epoch_map=geometry_epoch_map,
                 target_xyz=target_xyz,
-                base_positions=base_positions,
-                interpolate_code=interpolate_code,
-                interpolate_phase=interpolate_phase,
-                interpolate_snr=interpolate_snr,
+                min_satellites_per_epoch=min_satellites_per_epoch,
             )
 
-            if out_obs:
-                virtual_satellites.append(
-                    {
-                        "satellite": sat,
-                        "observations": out_obs,
-                    }
-                )
-                epoch_sat_debug.append(sat_debug)
-
-        virtual_satellites.sort(key=lambda x: x["satellite"])
-
-        if not virtual_satellites:
-            continue
-
-        epoch_key = target_epoch.isoformat()
-
-        virtual_epochs_raw.append(
-            {
-                "epoch": epoch_key,
-                "satellite_count": len(virtual_satellites),
-                "observations": virtual_satellites,
-                "debug": {
-                    "satellites": epoch_sat_debug,
-                },
-            }
-        )
-
-        debug_epochs.append(
-            {
-                "epoch": epoch_key,
-                "base_count": len(bases_at_epoch_debug),
-                "mean_satellite_count": (
-                    mean(item["satellite_count"] for item in bases_at_epoch_debug)
-                    if bases_at_epoch_debug
-                    else 0.0
+            summary = {
+                "mode": "phase_master_only",
+                "master_station_code": master_base.get("station_code"),
+                "native_interval_seconds": native_interval,
+                "target_step_seconds": native_interval,
+                "max_interpolation_gap_seconds": max_gap_seconds,
+                "min_satellites_per_epoch": min_satellites_per_epoch,
+                "geometry_status": geometry_cache.get("status"),
+                "geometry_source": geometry_cache.get("source"),
+                "geometry_epochs_with_satellites": geometry_cache.get(
+                    "epochs_with_geometry", 0
                 ),
-                "bases": bases_at_epoch_debug,
-                "geometry_satellite_count": len(epoch_geometry),
+                "bases_used": len(normalized_bases),
+                "allowed_systems": sorted(allowed_systems),
             }
+
+            obs_types = ["C1", "P1", "L1", "C2", "P2", "L2", "S1", "S2"]
+
+        else:
+            normalized_time_grid = requested_time_grid
+            output_step_seconds = float(config.get("target_step_seconds", 1) or 1)
+
+            print(
+                f"[ADV-INT] requested_time_grid={len(requested_time_grid)} "
+                f"effective_real_epochs={effective_real_epochs} "
+                f"usable_bases={len(normalized_bases)} "
+                f"target_xyz={target_xyz} internal_step={output_step_seconds:g} "
+                f"native_interval={native_interval:g} output_step={output_step_seconds:g}",
+                flush=True,
+            )
+
+            output_epochs, epochs_skipped = _build_output_epochs_code_mode(
+                normalized_time_grid=normalized_time_grid,
+                normalized_bases=normalized_bases,
+                geometry_epoch_map=geometry_epoch_map,
+                target_xyz=target_xyz,
+                max_gap_seconds=max_gap_seconds,
+                min_satellites_per_epoch=min_satellites_per_epoch,
+                allowed_systems=allowed_systems,
+            )
+
+            summary = {
+                "mode": "code_network_dense",
+                "native_interval_seconds": native_interval,
+                "target_step_seconds": output_step_seconds,
+                "max_interpolation_gap_seconds": max_gap_seconds,
+                "min_satellites_per_epoch": min_satellites_per_epoch,
+                "geometry_status": geometry_cache.get("status"),
+                "geometry_source": geometry_cache.get("source"),
+                "geometry_epochs_with_satellites": geometry_cache.get(
+                    "epochs_with_geometry", 0
+                ),
+                "bases_used": len(normalized_bases),
+                "allowed_systems": sorted(allowed_systems),
+            }
+
+            obs_types = ["C1", "P1", "C2", "P2", "S1", "S2"]
+
+        print(f"[ADV-INT] virtual_epochs_raw={len(output_epochs)}", flush=True)
+        print(f"[ADV-INT] virtual_epochs_after_filter={len(output_epochs)}", flush=True)
+        print(
+            f"[ADV-INT] virtual_epochs={len(output_epochs)} "
+            f"epochs_debug={len(output_epochs)} "
+            f"output_step_seconds={output_step_seconds:g}",
+            flush=True,
         )
 
-    print(
-        f"[ADV-INT] virtual_epochs_raw={len(virtual_epochs_raw)}",
-        flush=True,
-    )
-
-    virtual_epochs = _filter_epoch_observations_conservative(
-        virtual_epochs=virtual_epochs_raw,
-        min_satellites_per_epoch=min_satellites_per_epoch,
-        interpolate_code=interpolate_code,
-        interpolate_phase=interpolate_phase,
-    )
-
-    print(
-        f"[ADV-INT] virtual_epochs_after_filter={len(virtual_epochs)}",
-        flush=True,
-    )
-
-    virtual_epochs = _decimate_virtual_epochs(
-        virtual_epochs=virtual_epochs,
-        output_step_seconds=output_step_seconds,
-    )
-
-    final_epoch_set = {ep["epoch"] for ep in virtual_epochs}
-    debug_epochs = [ep for ep in debug_epochs if ep.get("epoch") in final_epoch_set]
-
-    print(
-        f"[ADV-INT] virtual_epochs={len(virtual_epochs)} "
-        f"epochs_debug={len(debug_epochs)} "
-        f"output_step_seconds={output_step_seconds}",
-        flush=True,
-    )
-
-    return {
-        "status": "completed",
-        "message": "Interpolação avançada conservadora executada com sucesso.",
-        "epochs_generated": len(virtual_epochs),
-        "epochs_skipped": max(0, len(normalized_time_grid) - len(virtual_epochs)),
-        "approx_x": target_xyz[0],
-        "approx_y": target_xyz[1],
-        "approx_z": target_xyz[2],
-        "interval_seconds": float(output_step_seconds),
-        "internal_interval_seconds": float(internal_step_seconds),
-        "native_interval_seconds": float(native_interval_seconds),
-        "epochs": [
-            {
-                "epoch": ep["epoch"],
-                "satellite_count": ep["satellite_count"],
-                "observations": ep["observations"],
-            }
-            for ep in virtual_epochs
-        ],
-        "epochs_debug": debug_epochs,
-        "summary": {
-            "time_grid_count": len(normalized_time_grid),
-            "input_bases": len(base_numeric_data or []),
-            "usable_bases": len(base_positions),
-            "geometry_cache_present": bool(geometry_cache),
-            "geometry_epochs": len(geometry_cache.get("epochs", []) or []),
-            "tolerance_seconds": tolerance_seconds,
-            "phase_tolerance_seconds": phase_tolerance_seconds,
-            "internal_step_seconds": internal_step_seconds,
-            "native_interval_seconds": native_interval_seconds,
-            "output_step_seconds": output_step_seconds,
-            "first_target_epoch": (
-                virtual_epochs[0]["epoch"] if virtual_epochs else None
+        return {
+            "status": "completed" if output_epochs else "failed",
+            "message": (
+                "Interpolação avançada concluída."
+                if output_epochs
+                else "A interpolação avançada não produziu épocas utilizáveis."
             ),
-            "last_target_epoch": (
-                virtual_epochs[-1]["epoch"] if virtual_epochs else None
-            ),
-        },
-    }
+            "epochs_generated": len(output_epochs),
+            "epochs_skipped": epochs_skipped,
+            "interval_seconds": output_step_seconds,
+            "obs_types": obs_types,
+            "approx_x": target_x,
+            "approx_y": target_y,
+            "approx_z": target_z,
+            "epochs": output_epochs,
+            "summary": summary,
+        }
+
+    except Exception as exc:
+        print(
+            f"[ADV-INT-ERROR] {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        return {
+            "status": "failed",
+            "message": f"Erro na interpolação avançada: {type(exc).__name__}: {exc}",
+            "epochs_generated": 0,
+            "epochs_skipped": 0,
+            "interval_seconds": float(config.get("target_step_seconds", 1) or 1),
+            "epochs": [],
+            "summary": {},
+        }

@@ -1,41 +1,41 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from math import cos, radians, sin, sqrt
 from pathlib import Path
 import json
-from datetime import timezone, datetime
-from math import sin, cos, sqrt, radians
 
 from app.services.vrs_processing_service import (
-    _load_selected_station_codes_from_job,
-    _resolve_candidate_base_paths,
-    _prepare_candidate_files,
     _extract_station_meta,
+    _load_selected_station_codes_from_job,
+    _prepare_candidate_files,
+    _resolve_candidate_base_paths,
 )
 
 from .advanced_config import normalize_advanced_config
-from .advanced_progress import write_advanced_progress
-from .advanced_window_service import (
-    build_advanced_requested_window,
-    build_target_time_grid,
-)
+from .advanced_debug_report_service import write_advanced_debug_report
 from .advanced_ephemeris_service import ensure_precise_ephemeris_products
-from .advanced_nav_service import resolve_advanced_navigation_files
 from .advanced_geometry_service import build_precise_geometry_cache
+from .advanced_nav_service import resolve_advanced_navigation_files
 from .advanced_observation_interpolation_service import (
     interpolate_advanced_observations,
-)
-from .advanced_validation_service import validate_advanced_seed
-from .advanced_rinex_writer_service import (
-    write_advanced_debug_seed,
-    write_advanced_rinex_from_seed,
-)
-from .advanced_debug_report_service import write_advanced_debug_report
-from .advanced_rinex_observation_reader_service import (
-    build_base_numeric_data_from_candidates,
 )
 from .advanced_ppp_filter_service import (
     harden_advanced_seed_for_ppp,
     write_advanced_ppp_filter_diagnostics,
+)
+from .advanced_progress import write_advanced_progress
+from .advanced_rinex_observation_reader_service import (
+    build_base_numeric_data_from_candidates,
+)
+from .advanced_rinex_writer_service import (
+    write_advanced_debug_seed,
+    write_advanced_rinex_from_seed,
+)
+from .advanced_validation_service import validate_advanced_seed
+from .advanced_window_service import (
+    build_advanced_requested_window,
+    build_target_time_grid,
 )
 
 
@@ -46,6 +46,64 @@ def _safe_float_or_none(value):
         return float(value)
     except Exception:
         return None
+
+
+def _json_default(value):
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _write_json(path: Path, payload) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            payload,
+            indent=2,
+            ensure_ascii=False,
+            default=_json_default,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _ensure_utc_datetime(value):
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+
+        text = text.replace("Z", "+00:00")
+
+        try:
+            dt = datetime.fromisoformat(text)
+        except Exception:
+            try:
+                dt = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                try:
+                    dt = datetime.strptime(text, "%y %m %d %H %M %S.%f")
+                except Exception:
+                    try:
+                        dt = datetime.strptime(text, "%Y %m %d %H %M %S.%f")
+                    except Exception:
+                        return None
+
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    return None
 
 
 def _extract_xyz_from_meta(
@@ -122,64 +180,6 @@ def _enrich_base_numeric_data_with_station_xyz(
         enriched.append(item)
 
     return enriched
-
-
-def _json_default(value):
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, datetime):
-        return value.isoformat()
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-
-
-def _write_json(path: Path, payload) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            payload,
-            indent=2,
-            ensure_ascii=False,
-            default=_json_default,
-        ),
-        encoding="utf-8",
-    )
-
-
-def _ensure_utc_datetime(value):
-    if value is None:
-        return None
-
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
-
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-
-        text = text.replace("Z", "+00:00")
-
-        try:
-            dt = datetime.fromisoformat(text)
-        except Exception:
-            try:
-                dt = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                try:
-                    dt = datetime.strptime(text, "%y %m %d %H %M %S.%f")
-                except Exception:
-                    try:
-                        dt = datetime.strptime(text, "%Y %m %d %H %M %S.%f")
-                    except Exception:
-                        return None
-
-        if dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-
-    return None
 
 
 def _normalize_base_numeric_data(base_numeric_data: list[dict]) -> list[dict]:
@@ -282,18 +282,23 @@ def _build_effective_time_grid(
     effective_grid = [t for t in time_grid if common_start <= t <= common_end]
 
     summary = {
+        "requested_start": time_grid[0] if time_grid else None,
+        "requested_end": time_grid[-1] if time_grid else None,
+        "requested_time_grid_count": len(time_grid),
+        "effective_time_grid_count": len(effective_grid),
         "common_start": common_start,
         "common_end": common_end,
-        "input_time_grid_count": len(time_grid),
-        "effective_time_grid_count": len(effective_grid),
         "valid_bases": len(valid_bases),
+        "mode": "preserve_requested_window",
     }
 
     return effective_grid, summary
 
 
 def _geodetic_to_ecef(
-    lat_deg: float, lon_deg: float, h_m: float
+    lat_deg: float,
+    lon_deg: float,
+    h_m: float,
 ) -> tuple[float, float, float]:
     a = 6378137.0
     f = 1 / 298.257223563
@@ -307,11 +312,11 @@ def _geodetic_to_ecef(
     sin_lon = sin(lon)
     cos_lon = cos(lon)
 
-    N = a / sqrt(1 - e2 * sin_lat * sin_lat)
+    n = a / sqrt(1 - e2 * sin_lat * sin_lat)
 
-    x = (N + h_m) * cos_lat * cos_lon
-    y = (N + h_m) * cos_lat * sin_lon
-    z = (N * (1 - e2) + h_m) * sin_lat
+    x = (n + h_m) * cos_lat * cos_lon
+    y = (n + h_m) * cos_lat * sin_lon
+    z = (n * (1 - e2) + h_m) * sin_lat
 
     return x, y, z
 
@@ -321,15 +326,140 @@ def _count_epochs_with_satellites(seed: dict) -> int:
     count = 0
 
     for epoch in epochs:
-        if (epoch.get("satellite_count") or 0) > 0:
+        if int(epoch.get("satellite_count") or 0) > 0:
             count += 1
             continue
 
-        observations = epoch.get("observations") or []
-        if observations:
+        if epoch.get("observations"):
             count += 1
 
     return count
+
+
+def _count_total_satellite_instances(seed: dict) -> int:
+    total = 0
+    for epoch in seed.get("epochs") or []:
+        obs = epoch.get("observations") or []
+        total += len(obs)
+    return total
+
+
+def _extract_interval_seconds(seed: dict, fallback: float) -> float:
+    try:
+        value = seed.get("interval_seconds")
+        if value is None or value == "":
+            return float(fallback)
+        return float(value)
+    except Exception:
+        return float(fallback)
+
+
+def _choose_final_seed(
+    pre_ppp_seed: dict,
+    post_ppp_seed: dict | None,
+    ppp_filter_diagnostics: dict | None,
+) -> tuple[dict, dict]:
+    pre_epochs = int(pre_ppp_seed.get("epochs_generated", 0) or 0)
+    pre_epochs_with_sat = _count_epochs_with_satellites(pre_ppp_seed)
+    pre_sat_instances = _count_total_satellite_instances(pre_ppp_seed)
+
+    if not isinstance(post_ppp_seed, dict):
+        return pre_ppp_seed, {
+            "selected_source": "pre_ppp",
+            "reason": "post_ppp_seed_invalid",
+            "pre_epochs": pre_epochs,
+            "pre_epochs_with_satellites": pre_epochs_with_sat,
+            "pre_satellite_instances": pre_sat_instances,
+        }
+
+    post_epochs = int(post_ppp_seed.get("epochs_generated", 0) or 0)
+    post_epochs_with_sat = _count_epochs_with_satellites(post_ppp_seed)
+    post_sat_instances = _count_total_satellite_instances(post_ppp_seed)
+
+    if post_epochs_with_sat <= 0 or post_sat_instances <= 0:
+        return pre_ppp_seed, {
+            "selected_source": "pre_ppp",
+            "reason": "post_ppp_empty",
+            "pre_epochs": pre_epochs,
+            "pre_epochs_with_satellites": pre_epochs_with_sat,
+            "pre_satellite_instances": pre_sat_instances,
+            "post_epochs": post_epochs,
+            "post_epochs_with_satellites": post_epochs_with_sat,
+            "post_satellite_instances": post_sat_instances,
+        }
+
+    if pre_epochs_with_sat > 0:
+        epoch_ratio = post_epochs_with_sat / max(1, pre_epochs_with_sat)
+        sat_ratio = post_sat_instances / max(1, pre_sat_instances)
+
+        if epoch_ratio < 0.60 or sat_ratio < 0.45:
+            return pre_ppp_seed, {
+                "selected_source": "pre_ppp",
+                "reason": "post_ppp_overfiltered",
+                "epoch_ratio": epoch_ratio,
+                "sat_ratio": sat_ratio,
+                "pre_epochs": pre_epochs,
+                "pre_epochs_with_satellites": pre_epochs_with_sat,
+                "pre_satellite_instances": pre_sat_instances,
+                "post_epochs": post_epochs,
+                "post_epochs_with_satellites": post_epochs_with_sat,
+                "post_satellite_instances": post_sat_instances,
+            }
+
+    return post_ppp_seed, {
+        "selected_source": "post_ppp",
+        "reason": "post_ppp_accepted",
+        "pre_epochs": pre_epochs,
+        "pre_epochs_with_satellites": pre_epochs_with_sat,
+        "pre_satellite_instances": pre_sat_instances,
+        "post_epochs": post_epochs,
+        "post_epochs_with_satellites": post_epochs_with_sat,
+        "post_satellite_instances": post_sat_instances,
+        "ppp_filter_stage": (
+            ppp_filter_diagnostics.get("stage")
+            if isinstance(ppp_filter_diagnostics, dict)
+            else None
+        ),
+    }
+
+
+def _decide_advanced_output_profile(cfg: dict) -> dict:
+    use_phase = bool(cfg.get("interpolate_phase_observables", False))
+
+    if use_phase:
+        return {
+            "profile_name": "ppp_gps_strict",
+            "allowed_systems": ["G"],
+            "writer_require_phase_observables": True,
+            "writer_obs_types": ["C1", "L1", "P2", "L2"],
+            "ppp_require_dual_frequency": True,
+            "ppp_require_phase_for_dual_frequency": True,
+            "ppp_prefer_phase_but_do_not_require": False,
+            "max_satellites": 8,
+            "min_presence_ratio": 0.45,
+            "min_dual_freq_ratio": 0.40,
+            "max_gap_epochs": 20,
+            "min_satellites_per_epoch": max(
+                4, int(cfg.get("min_satellites_per_epoch", 4) or 4)
+            ),
+        }
+
+    return {
+        "profile_name": "mixed_code_dense",
+        "allowed_systems": ["G", "R"],
+        "writer_require_phase_observables": False,
+        "writer_obs_types": ["C1", "P2"],
+        "ppp_require_dual_frequency": False,
+        "ppp_require_phase_for_dual_frequency": False,
+        "ppp_prefer_phase_but_do_not_require": True,
+        "max_satellites": 10,
+        "min_presence_ratio": 0.25,
+        "min_dual_freq_ratio": 0.00,
+        "max_gap_epochs": 40,
+        "min_satellites_per_epoch": max(
+            4, int(cfg.get("min_satellites_per_epoch", 4) or 4)
+        ),
+    }
 
 
 def process_real_vrs_advanced(
@@ -355,6 +485,9 @@ def process_real_vrs_advanced(
     print(f"[ADV-PIPE] job_root={job_root}", flush=True)
 
     cfg = normalize_advanced_config(profile_config)
+    output_profile = _decide_advanced_output_profile(cfg)
+    cfg["output_profile"] = output_profile
+
     print(f"[ADV-PIPE] cfg={cfg}", flush=True)
 
     _write_json(metadata_root / "advanced_config_used.json", cfg)
@@ -554,7 +687,60 @@ def process_real_vrs_advanced(
         f"{len(base_numeric_data)} bases com dados na janela",
     )
 
-    nav_context = resolve_advanced_navigation_files(candidate_paths)
+    nav_context_input = []
+
+    for item in candidate_paths or []:
+        nav_context_input.append(
+            {
+                "station_code": item.get("station_code"),
+                "label": item.get("label"),
+                "path": str(item.get("path")) if item.get("path") else None,
+                "source": "candidate_paths",
+            }
+        )
+
+    for item in prepared_candidates or []:
+        nav_context_input.append(
+            {
+                "station_code": item.get("station_code"),
+                "label": item.get("label"),
+                "obs_path": (
+                    str(item.get("copied_path")) if item.get("copied_path") else None
+                ),
+                "rinex_path": (
+                    str(item.get("rinex_path")) if item.get("rinex_path") else None
+                ),
+                "copied_path": (
+                    str(item.get("copied_path")) if item.get("copied_path") else None
+                ),
+                "original_path": (
+                    str(item.get("original_path"))
+                    if item.get("original_path")
+                    else None
+                ),
+                "source": "prepared_candidates",
+            }
+        )
+
+    for meta in candidate_metas or []:
+        nav_context_input.append(
+            {
+                "station_code": meta.get("station_code"),
+                "label": meta.get("label"),
+                "obs_path": meta.get("file_path"),
+                "rinex_path": meta.get("rinex_path"),
+                "copied_path": meta.get("copied_path"),
+                "original_path": meta.get("original_path"),
+                "source": "candidate_metas",
+            }
+        )
+
+    print(
+        f"[ADV-PIPE] nav_context_input_preview={json.dumps(nav_context_input[:8], ensure_ascii=False, default=_json_default)}",
+        flush=True,
+    )
+
+    nav_context = resolve_advanced_navigation_files(nav_context_input)
 
     _write_json(
         metadata_root / "advanced_navigation_context.json",
@@ -622,8 +808,17 @@ def process_real_vrs_advanced(
     )
 
     if use_precise_ephemeris and not precise_products.get("sp3_available"):
-        raise ValueError(
-            "Não foi possível obter arquivo SP3 válido para a data do job no modo avançado."
+        print(
+            "[ADV-PIPE] SP3 indisponível; seguindo com fallback para geometria broadcast/nav.",
+            flush=True,
+        )
+        write_advanced_progress(
+            job_root,
+            46,
+            "precise_products_fallback",
+            "SP3 indisponível; seguindo com fallback",
+            "O modo avançado continuará com geometria derivada da navegação broadcast.",
+            status="running",
         )
 
     time_grid = build_target_time_grid(
@@ -724,7 +919,8 @@ def process_real_vrs_advanced(
         "Calculando interpolação das observáveis",
         (
             f"code={bool(cfg.get('interpolate_code_observables'))} | "
-            f"phase={bool(cfg.get('interpolate_phase_observables'))}"
+            f"phase={bool(cfg.get('interpolate_phase_observables'))} | "
+            f"profile={output_profile['profile_name']}"
         ),
     )
 
@@ -753,14 +949,20 @@ def process_real_vrs_advanced(
         advanced_seed_pre_ppp,
     )
 
+    pre_ppp_epochs_generated = int(
+        advanced_seed_pre_ppp.get("epochs_generated", 0) or 0
+    )
+    pre_ppp_epochs_with_sat = _count_epochs_with_satellites(advanced_seed_pre_ppp)
+
     _write_json(
         metadata_root / "advanced_seed_pre_ppp_summary.json",
         {
             "status": advanced_seed_pre_ppp.get("status"),
             "message": advanced_seed_pre_ppp.get("message"),
-            "epochs_generated": advanced_seed_pre_ppp.get("epochs_generated"),
+            "epochs_generated": pre_ppp_epochs_generated,
             "epochs_skipped": advanced_seed_pre_ppp.get("epochs_skipped"),
-            "epochs_with_satellites": _count_epochs_with_satellites(
+            "epochs_with_satellites": pre_ppp_epochs_with_sat,
+            "satellite_instances": _count_total_satellite_instances(
                 advanced_seed_pre_ppp
             ),
             "summary": advanced_seed_pre_ppp.get("summary"),
@@ -769,15 +971,15 @@ def process_real_vrs_advanced(
     )
 
     print(
-        f"[ADV-PIPE] advanced_seed_pre_ppp_epochs_generated={advanced_seed_pre_ppp.get('epochs_generated')}",
+        f"[ADV-PIPE] advanced_seed_pre_ppp_epochs_generated={pre_ppp_epochs_generated}",
         flush=True,
     )
     print(
-        f"[ADV-PIPE] advanced_seed_pre_ppp_epochs_with_satellites={_count_epochs_with_satellites(advanced_seed_pre_ppp)}",
+        f"[ADV-PIPE] advanced_seed_pre_ppp_epochs_with_satellites={pre_ppp_epochs_with_sat}",
         flush=True,
     )
 
-    if advanced_seed_pre_ppp.get("epochs_generated", 0) <= 0:
+    if pre_ppp_epochs_generated <= 0:
         _write_json(
             metadata_root / "advanced_seed_zero_debug.json",
             {
@@ -791,7 +993,6 @@ def process_real_vrs_advanced(
             "Arquivo debug salvo em metadata/advanced_seed_zero_debug.json."
         )
 
-    pre_ppp_epochs_with_sat = _count_epochs_with_satellites(advanced_seed_pre_ppp)
     if pre_ppp_epochs_with_sat <= 0:
         _write_json(
             metadata_root / "advanced_seed_empty_observations_debug.json",
@@ -822,7 +1023,7 @@ def process_real_vrs_advanced(
         "interpolation_done",
         "Interpolação avançada executada",
         (
-            f"epochs_generated={advanced_seed_pre_ppp.get('epochs_generated', 0)} | "
+            f"epochs_generated={pre_ppp_epochs_generated} | "
             f"epochs_with_satellites={pre_ppp_epochs_with_sat}"
         ),
     )
@@ -832,19 +1033,28 @@ def process_real_vrs_advanced(
         80,
         "ppp_hardening_start",
         "Aplicando endurecimento PPP nas observáveis",
-        "Seleção de satélites e recorte do melhor bloco contínuo",
+        (
+            f"profile={output_profile['profile_name']} | "
+            f"systems={','.join(output_profile['allowed_systems'])}"
+        ),
     )
 
     advanced_seed_post_ppp, ppp_filter_diagnostics = harden_advanced_seed_for_ppp(
         seed=advanced_seed_pre_ppp,
-        max_satellites=12,
-        min_presence_ratio=0.30,
-        min_dual_freq_ratio=0.25,
-        max_gap_epochs=45,
-        min_satellites_per_epoch=4,
-        require_dual_frequency=True,
-        prefer_phase_but_do_not_require=True,
+        max_satellites=output_profile["max_satellites"],
+        min_presence_ratio=output_profile["min_presence_ratio"],
+        min_dual_freq_ratio=output_profile["min_dual_freq_ratio"],
+        max_gap_epochs=output_profile["max_gap_epochs"],
+        min_satellites_per_epoch=output_profile["min_satellites_per_epoch"],
+        require_dual_frequency=output_profile["ppp_require_dual_frequency"],
+        require_phase_for_dual_frequency=output_profile[
+            "ppp_require_phase_for_dual_frequency"
+        ],
+        prefer_phase_but_do_not_require=output_profile[
+            "ppp_prefer_phase_but_do_not_require"
+        ],
         priority_obs=["C1", "P1", "L1", "C2", "P2", "L2", "S1", "S2"],
+        allowed_systems=output_profile["allowed_systems"],
     )
 
     ppp_filter_diag_path = write_advanced_ppp_filter_diagnostics(
@@ -872,6 +1082,9 @@ def process_real_vrs_advanced(
             "epochs_generated": advanced_seed_post_ppp.get("epochs_generated"),
             "epochs_skipped": advanced_seed_post_ppp.get("epochs_skipped"),
             "epochs_with_satellites": post_ppp_epochs_with_sat,
+            "satellite_instances": _count_total_satellite_instances(
+                advanced_seed_post_ppp
+            ),
             "seed_json_path": post_ppp_seed_json_path,
         },
     )
@@ -887,13 +1100,42 @@ def process_real_vrs_advanced(
         ),
     )
 
-    if post_ppp_epochs_with_sat <= 0:
+    final_seed, final_seed_selection = _choose_final_seed(
+        pre_ppp_seed=advanced_seed_pre_ppp,
+        post_ppp_seed=advanced_seed_post_ppp,
+        ppp_filter_diagnostics=ppp_filter_diagnostics,
+    )
+
+    final_seed_json_path = write_advanced_debug_seed(
+        str(result_root / "advanced_seed_final.json"),
+        final_seed,
+    )
+
+    _write_json(
+        metadata_root / "advanced_seed_final_selection.json",
+        {
+            **final_seed_selection,
+            "final_seed_json_path": final_seed_json_path,
+        },
+    )
+
+    final_epochs_with_sat = _count_epochs_with_satellites(final_seed)
+
+    print(
+        f"[ADV-PIPE] final_seed_source={final_seed_selection.get('selected_source')}",
+        flush=True,
+    )
+    print(
+        f"[ADV-PIPE] final_epochs_with_satellites={final_epochs_with_sat}",
+        flush=True,
+    )
+
+    if final_epochs_with_sat <= 0:
         raise ValueError(
-            "Após o endurecimento PPP, nenhuma época permaneceu com satélites utilizáveis. "
-            "Compare result/advanced_seed_pre_ppp.json com result/advanced_seed_post_ppp.json."
+            "Nenhuma época utilizável permaneceu após a seleção final do seed avançado."
         )
 
-    validation = validate_advanced_seed(advanced_seed_post_ppp, cfg)
+    validation = validate_advanced_seed(final_seed, cfg)
 
     write_advanced_progress(
         job_root,
@@ -905,11 +1147,10 @@ def process_real_vrs_advanced(
     )
 
     reference_rinex_path = prepared_candidates[0]["rinex_path"]
-
     output_path = write_advanced_rinex_from_seed(
         reference_rinex_path=reference_rinex_path,
         output_path=str(result_root / "ADVANCED_BASE.obs"),
-        advanced_seed=advanced_seed_post_ppp,
+        advanced_seed=final_seed,
         marker_name=(getattr(job, "output_marker_name", None) or "ADVBASE"),
         receiver_brand=cfg["receiver_brand"],
         receiver_model=cfg["receiver_model"],
@@ -917,15 +1158,20 @@ def process_real_vrs_advanced(
         antenna_model=cfg["antenna_model"],
         approx_position_xyz=approx_position_xyz,
         antenna_delta_hen=(0.0, 0.0, 0.0),
-        interval_seconds=float(
-            advanced_seed_post_ppp.get("interval_seconds", cfg["target_step_seconds"])
+        interval_seconds=_extract_interval_seconds(
+            final_seed,
+            float(cfg.get("target_step_seconds", 1) or 1),
         ),
-        require_phase_observables=bool(cfg.get("interpolate_phase_observables", True)),
+        require_phase_observables=output_profile["writer_require_phase_observables"],
+        output_systems=output_profile["allowed_systems"],
+        forced_obs_types=["C1", "P1", "L1", "C2", "P2", "L2"],
     )
+
     debug_report = {
         "job_id": job.id,
         "processed_at": datetime.utcnow().isoformat() + "Z",
         "config": cfg,
+        "output_profile": output_profile,
         "window": {
             "start_local": window["start_local"].isoformat(sep=" "),
             "end_local": window["end_local"].isoformat(sep=" "),
@@ -953,6 +1199,8 @@ def process_real_vrs_advanced(
         "validation": validation,
         "pre_ppp_seed_json_path": pre_ppp_seed_json_path,
         "post_ppp_seed_json_path": post_ppp_seed_json_path,
+        "final_seed_json_path": final_seed_json_path,
+        "final_seed_selection": final_seed_selection,
         "output_path": output_path,
         "ppp_filter_diagnostics": ppp_filter_diagnostics,
     }
@@ -977,10 +1225,13 @@ def process_real_vrs_advanced(
         "ok": validation["status"] == "completed",
         "job_id": job.id,
         "mode": "advanced_experimental",
+        "output_profile": output_profile,
         "output_path": output_path,
         "debug_report_path": debug_report_path,
         "pre_ppp_seed_json_path": pre_ppp_seed_json_path,
         "post_ppp_seed_json_path": post_ppp_seed_json_path,
+        "final_seed_json_path": final_seed_json_path,
+        "final_seed_selection": final_seed_selection,
         "validation": validation,
         "precise_products": precise_products,
         "ppp_filter_diagnostics_path": ppp_filter_diag_path,

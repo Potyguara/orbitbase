@@ -555,6 +555,29 @@ def _download_and_prepare_station_day(
     }
 
 
+# ORBITBASE_RBMC_AUTOFIX_V1
+# Prioriza o nome real publicado no indice diario do IBGE; sem inferir subpastas.
+def _orbitbase_match_daily_zip_links(available_links, station_code, target_date):
+    from urllib.parse import urlparse, unquote
+    import re
+
+    station = str(station_code).strip().lower()
+    doy = f"{target_date.timetuple().tm_yday:03d}"
+    exact_name = f"{station}{doy}1.zip"
+    matched = []
+    for link in available_links or []:
+        filename = unquote(urlparse(str(link)).path.rsplit('/', 1)[-1]).lower()
+        # Ex.: aplj1571.zip, apma1571.zip, aps11571.zip
+        if filename == exact_name or re.fullmatch(
+            re.escape(station + doy) + r"[0-9]\.zip", filename
+        ):
+            matched.append(str(link))
+    # Preferir a sessao diaria 1, preservando demais sessoes como alternativas.
+    return sorted(dict.fromkeys(matched), key=lambda x: (
+        0 if x.lower().endswith('/' + exact_name) else 1, x
+    ))
+
+
 def sync_rbmc_observations_for_date(
     db: Session,
     storage_root: str,
@@ -596,8 +619,13 @@ def sync_rbmc_observations_for_date(
         }
 
     day_folder_url = _build_day_folder_url(target_date)
-    html = _fetch_html(day_folder_url)
-    available_links = _extract_download_links_from_page(html, day_folder_url)
+    try:
+        html = _fetch_html(day_folder_url)
+        available_links = _extract_download_links_from_page(html, day_folder_url)
+    except requests.RequestException as exc:
+        # Não impedir a busca em cache de outras estações por falha do índice.
+        print(f"[RBMC-SYNC] Índice diário inacessível: {exc}", flush=True)
+        available_links = []
 
     results = []
     failed = 0
@@ -616,7 +644,7 @@ def sync_rbmc_observations_for_date(
 
             observation_files = existing["observation_files"]
             navigation_files = existing["navigation_files"]
-            matched_zip_links = _match_station_zip_links(
+            matched_zip_links = _orbitbase_match_daily_zip_links(
                 available_links=available_links,
                 station_code=code,
                 target_date=target_date,

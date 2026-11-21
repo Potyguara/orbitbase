@@ -11,8 +11,7 @@ import subprocess
 import requests
 from bs4 import BeautifulSoup
 
-DEFAULT_TIMEOUT_SECONDS = 60
-
+DEFAULT_TIMEOUT_SECONDS = 20
 GPS_EPOCH = datetime(1980, 1, 6, tzinfo=timezone.utc)
 
 
@@ -177,11 +176,168 @@ def _final_sp3_output_name(downloaded_name: str) -> str:
     return downloaded_name
 
 
+def _sanitize_filename(name: str) -> str:
+    return Path(name).name.replace("/", "_").replace("\\", "_").strip()
+
+
+def _manual_upload_root(day_root: Path) -> Path:
+    path = day_root / "manual_uploads"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _manual_valid_sp3_dir(day_root: Path) -> Path:
+    path = day_root / "manual_sp3"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _sp3_candidate_priority(name: str) -> tuple[int, int, int, str]:
+    lower = name.lower()
+
+    if "igs" in lower:
+        family_rank = 0
+    elif "igr" in lower:
+        family_rank = 1
+    elif "igu" in lower:
+        family_rank = 2
+    elif "igv" in lower:
+        family_rank = 3
+    else:
+        family_rank = 9
+
+    hourly_rank = 9
+    for token_rank, token in enumerate(["_00", "_06", "_12", "_18"]):
+        if token in lower:
+            hourly_rank = token_rank
+            break
+
+    if lower.endswith(".sp3"):
+        ext_rank = 0
+    elif lower.endswith(".sp3.z"):
+        ext_rank = 1
+    elif lower.endswith(".sp3.gz"):
+        ext_rank = 2
+    else:
+        ext_rank = 9
+
+    return (family_rank, hourly_rank, ext_rank, lower)
+
+
+def _pick_best_sp3(paths: list[Path]) -> Path | None:
+    valid = [
+        p for p in paths if p.exists() and p.is_file() and _looks_like_valid_sp3(p)
+    ]
+    if not valid:
+        return None
+    valid.sort(key=lambda p: _sp3_candidate_priority(p.name))
+    return valid[0]
+
+
+def save_manual_sp3_uploads(
+    session_date: str,
+    storage_root: Path,
+    uploads: list[tuple[str, bytes]],
+) -> dict:
+    day_root = storage_root / "precise_products" / session_date
+    day_root.mkdir(parents=True, exist_ok=True)
+
+    raw_dir = _manual_upload_root(day_root)
+    valid_dir = _manual_valid_sp3_dir(day_root)
+    manifest_path = day_root / "manifest.json"
+    previous_manifest = _load_json(manifest_path) or {}
+
+    stored_raw: list[str] = []
+    valid_sp3: list[str] = []
+    rejected: list[str] = []
+    errors: list[str] = []
+
+    for original_name, content in uploads or []:
+        safe_name = _sanitize_filename(original_name)
+        if not safe_name:
+            rejected.append("arquivo_sem_nome")
+            continue
+
+        raw_path = raw_dir / safe_name
+        final_name = _final_sp3_output_name(safe_name)
+        final_path = valid_dir / final_name
+
+        _safe_unlink(raw_path)
+        _safe_unlink(final_path)
+
+        try:
+            raw_path.write_bytes(content)
+            stored_raw.append(str(raw_path))
+
+            if _looks_like_html_response(raw_path):
+                rejected.append(f"{safe_name} :: conteúdo HTML/login inválido")
+                _safe_unlink(raw_path)
+                continue
+
+            lower = safe_name.lower()
+
+            if lower.endswith(".gz"):
+                _gunzip_file(raw_path, final_path)
+            elif lower.endswith(".z"):
+                _decompress_Z_file(raw_path, final_path)
+            elif lower.endswith(".sp3"):
+                shutil.copyfile(raw_path, final_path)
+            else:
+                rejected.append(f"{safe_name} :: extensão não suportada")
+                _safe_unlink(raw_path)
+                continue
+
+            if _looks_like_html_response(final_path):
+                rejected.append(f"{safe_name} :: descompressão resultou em HTML/login")
+                _safe_unlink(final_path)
+                continue
+
+            if not _looks_like_valid_sp3(final_path):
+                rejected.append(f"{safe_name} :: arquivo não validado como SP3")
+                _safe_unlink(final_path)
+                continue
+
+            valid_sp3.append(str(final_path))
+
+        except Exception as exc:
+            errors.append(f"{safe_name} :: {type(exc).__name__}: {exc}")
+            _safe_unlink(final_path)
+
+    best_sp3 = _pick_best_sp3([Path(p) for p in valid_sp3])
+
+    payload = {
+        "session_date": session_date,
+        "sp3_available": best_sp3 is not None,
+        "clk_available": False,
+        "sp3_path": str(best_sp3) if best_sp3 else None,
+        "clk_path": None,
+        "sp3_source_url": None,
+        "sp3_source_filename": best_sp3.name if best_sp3 else None,
+        "status": "manual_upload" if best_sp3 else "manual_upload_invalid",
+        "sp3_cached": False,
+        "checked_at": datetime.utcnow().isoformat() + "Z",
+        "download_errors": previous_manifest.get("download_errors", []),
+        "manual_upload_used": best_sp3 is not None,
+        "manual_upload_count": len(uploads or []),
+        "valid_sp3_count": len(valid_sp3),
+        "manual_sp3_files": valid_sp3,
+        "manual_raw_files": stored_raw,
+        "rejected_files": rejected,
+        "manual_upload_errors": errors,
+        "auth_mode": previous_manifest.get("auth_mode", "manual"),
+        "earthdata_username_masked": previous_manifest.get("earthdata_username_masked"),
+    }
+
+    _write_json(manifest_path, payload)
+    return payload
+
+
 def _build_requests_session(
     username: str | None = None,
     password: str | None = None,
 ) -> requests.Session:
     session = requests.Session()
+
     if username and password:
         session.auth = (username, password)
 
@@ -291,34 +447,6 @@ def _discover_sp3_candidates_from_cddis_listing(
     return candidates
 
 
-def _sp3_candidate_priority(name: str) -> tuple[int, int, int, str]:
-    lower = name.lower()
-
-    if "igs" in lower:
-        family_rank = 0
-    elif "igr" in lower:
-        family_rank = 1
-    elif "igu" in lower:
-        family_rank = 2
-    else:
-        family_rank = 9
-
-    hourly_rank = 9
-    for token_rank, token in enumerate(["_00", "_06", "_12", "_18"]):
-        if token in lower:
-            hourly_rank = token_rank
-            break
-
-    if lower.endswith(".sp3.z"):
-        ext_rank = 0
-    elif lower.endswith(".sp3.gz"):
-        ext_rank = 1
-    else:
-        ext_rank = 9
-
-    return (family_rank, hourly_rank, ext_rank, lower)
-
-
 def _build_sp3_candidates(
     session_date: str,
     earthdata_username: str | None = None,
@@ -380,14 +508,6 @@ def _build_sp3_candidates(
                 source="ign_classic",
             )
         )
-        add_candidate(
-            DownloadCandidate(
-                url=f"https://igs.bkg.bund.de/root_ftp/IGS/products/{gps_week_str}/{name}",
-                filename=name,
-                compressed=True,
-                source="bkg_classic",
-            )
-        )
 
     long_names = [
         f"IGS0OPSFIN_{yyyy}{doy3}0000_01D_15M_ORB.SP3.gz",
@@ -412,26 +532,23 @@ def _build_sp3_candidates(
                 source="ign_long",
             )
         )
-        add_candidate(
-            DownloadCandidate(
-                url=f"https://igs.bkg.bund.de/root_ftp/IGS/products/{gps_week_str}/{name}",
-                filename=name,
-                compressed=True,
-                source="bkg_long",
-            )
-        )
 
     return candidates
 
 
 def _find_cached_sp3(day_root: Path) -> Path | None:
-    candidates = sorted(day_root.glob("*.sp3")) + sorted(day_root.glob("*.SP3"))
+    candidates: list[Path] = []
 
-    for path in candidates:
-        if _looks_like_valid_sp3(path):
-            return path
+    manual_dir = day_root / "manual_sp3"
+    if manual_dir.exists():
+        candidates.extend(sorted(manual_dir.glob("*.sp3")))
+        candidates.extend(sorted(manual_dir.glob("*.SP3")))
 
-    return None
+    candidates.extend(sorted(day_root.glob("*.sp3")))
+    candidates.extend(sorted(day_root.glob("*.SP3")))
+
+    best = _pick_best_sp3(candidates)
+    return best
 
 
 def _try_download_sp3(
@@ -525,6 +642,7 @@ def _try_download_sp3(
                     "sp3_source_filename": candidate.filename,
                     "sp3_cached": False,
                     "download_errors": errors,
+                    "manual_upload_used": False,
                 }
 
             errors.append(f"Arquivo baixado mas inválido como SP3: {candidate.url}")
@@ -547,6 +665,7 @@ def _try_download_sp3(
         "sp3_source_filename": None,
         "sp3_cached": False,
         "download_errors": errors,
+        "manual_upload_used": False,
     }
 
 
@@ -570,6 +689,8 @@ def ensure_precise_ephemeris_products(
     if not force_refresh:
         cached_sp3 = _find_cached_sp3(day_root)
         if cached_sp3 is not None:
+            is_manual = "manual_sp3" in str(cached_sp3)
+
             payload = {
                 "session_date": session_date,
                 "sp3_available": True,
@@ -578,12 +699,16 @@ def ensure_precise_ephemeris_products(
                 "clk_path": None,
                 "sp3_source_url": previous_manifest.get("sp3_source_url"),
                 "sp3_source_filename": cached_sp3.name,
-                "status": "cached",
+                "status": "manual_cached" if is_manual else "cached",
                 "sp3_cached": True,
                 "checked_at": datetime.utcnow().isoformat() + "Z",
                 "download_errors": previous_manifest.get("download_errors", []),
                 "auth_mode": auth_mode,
                 "earthdata_username_masked": masked_username,
+                "manual_upload_used": is_manual,
+                "manual_sp3_files": previous_manifest.get("manual_sp3_files", []),
+                "manual_upload_count": previous_manifest.get("manual_upload_count", 0),
+                "valid_sp3_count": previous_manifest.get("valid_sp3_count", 0),
             }
             _write_json(manifest_path, payload)
             return payload
@@ -610,6 +735,10 @@ def ensure_precise_ephemeris_products(
         "download_errors": download_result["download_errors"],
         "auth_mode": auth_mode,
         "earthdata_username_masked": masked_username,
+        "manual_upload_used": False,
+        "manual_sp3_files": previous_manifest.get("manual_sp3_files", []),
+        "manual_upload_count": previous_manifest.get("manual_upload_count", 0),
+        "valid_sp3_count": previous_manifest.get("valid_sp3_count", 0),
     }
 
     _write_json(manifest_path, payload)

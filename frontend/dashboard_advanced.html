@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OrbitBase | Dashboard Avançada</title>
-  <link rel="stylesheet" href="./styles.css?v=700" />
+  <link rel="stylesheet" href="./styles.css?v=701" />
 </head>
 <body class="dashboard-body">
   <header class="topbar">
@@ -19,7 +19,7 @@
 
       <nav class="nav">
         <a class="btn btn-outline" href="./dashboard.html">Modo básico</a>
-     <button id="go-profile-btn" class="btn btn-outline" type="button">Perfil</button>
+        <button id="go-profile-btn" class="btn btn-outline" type="button">Perfil</button>
         <button id="logout-btn" class="btn btn-outline" type="button">Sair</button>
       </nav>
     </div>
@@ -39,7 +39,7 @@
           </div>
         </div>
 
-        <form id="advanced-job-form" class="form-card">
+        <form id="advanced-job-form" class="form-card" enctype="multipart/form-data">
           <div class="form-section-title">Identificação</div>
           <div class="form-grid">
             <div class="form-field form-field-full">
@@ -71,6 +71,28 @@
             </div>
           </div>
 
+    <div class="form-section-title">Efemérides do dia</div>
+<div class="form-grid">
+  <div class="form-field form-field-full">
+    <label for="advanced-sp3-file">Upload manual da efeméride SP3</label>
+    <input
+      id="advanced-sp3-file"
+      type="file"
+      multiple
+      accept=".sp3,.SP3,.gz,.GZ,.z,.Z"
+    />
+    <small>Aceita arquivos .sp3, .sp3.gz e .sp3.Z</small>
+  </div>
+
+
+            <div class="form-field form-field-full">
+              <div class="upload-info-box">
+                <strong>Fluxo recomendado:</strong><br />
+                envie a efeméride do mesmo dia do processamento avançado para evitar dependência do download automático.
+              </div>
+            </div>
+          </div>
+
           <div class="form-section-title">Configuração experimental</div>
           <div class="form-grid">
             <div class="form-field">
@@ -96,16 +118,31 @@
 
           <div class="form-grid">
             <div class="form-field">
-              <label><input id="advanced-use-sp3" type="checkbox" checked /> Usar efemérides precisas (SP3)</label>
+              <label>
+                <input id="advanced-use-sp3" type="checkbox" checked />
+                Usar efemérides precisas (SP3)
+              </label>
             </div>
+
             <div class="form-field">
-              <label><input id="advanced-use-clk" type="checkbox" /> Usar relógios precisos (CLK)</label>
+              <label>
+                <input id="advanced-use-clk" type="checkbox" />
+                Usar relógios precisos (CLK)
+              </label>
             </div>
+
             <div class="form-field">
-              <label><input id="advanced-interpolate-code" type="checkbox" checked /> Interpolar observáveis de código</label>
+              <label>
+                <input id="advanced-interpolate-code" type="checkbox" checked />
+                Interpolar observáveis de código
+              </label>
             </div>
+
             <div class="form-field">
-              <label><input id="advanced-interpolate-phase" type="checkbox" /> Interpolar fase (experimental)</label>
+              <label>
+                <input id="advanced-interpolate-phase" type="checkbox" />
+                Interpolar fase (experimental)
+              </label>
             </div>
           </div>
 
@@ -143,7 +180,6 @@
     </div>
   </main>
 
-
-<script src="./script_advanced.js?v=801"></script>
+  <script src="./script_advanced.js?v=802"></script>
 </body>
 </html>

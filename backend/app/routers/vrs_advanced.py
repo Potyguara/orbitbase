@@ -4,12 +4,15 @@ from pathlib import Path
 import json
 import base64
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
 from app.models import User, VRSJob, UserAdvancedCredentials
+from app.services.vrs_advanced.advanced_ephemeris_service import (
+    save_manual_sp3_uploads,
+)
 from app.services.vrs_advanced.advanced_pipeline_service import (
     process_real_vrs_advanced,
 )
@@ -46,6 +49,75 @@ def _decode_optional_base64(value: str | None) -> str | None:
         return value
 
 
+@router.post("/{job_id}/advanced-ephemeris-upload")
+async def upload_job_advanced_ephemeris(
+    job_id: int,
+    session_date: str = Form(...),
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    job = (
+        db.query(VRSJob)
+        .filter(VRSJob.id == job_id, VRSJob.user_id == current_user.id)
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job não encontrado.")
+
+    if not files:
+        raise HTTPException(
+            status_code=400,
+            detail="Nenhum arquivo de efeméride foi enviado.",
+        )
+
+    try:
+        storage_root = Path(__file__).resolve().parents[2] / "storage"
+
+        uploads: list[tuple[str, bytes]] = []
+        for file in files:
+            if not file.filename:
+                continue
+            content = await file.read()
+            uploads.append((file.filename, content))
+
+        if not uploads:
+            raise HTTPException(
+                status_code=400,
+                detail="Os arquivos enviados estão vazios ou sem nome válido.",
+            )
+
+        result = save_manual_sp3_uploads(
+            session_date=session_date,
+            storage_root=storage_root,
+            uploads=uploads,
+        )
+
+        job.session_date = session_date
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        return {
+            "ok": True,
+            "job_id": job.id,
+            "message": (
+                f"Efemérides manuais processadas com sucesso. "
+                f"{result.get('valid_sp3_count', 0)} arquivo(s) SP3 válido(s)."
+            ),
+            "result": result,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{type(exc).__name__}: {exc}",
+        )
+
+
 @router.post("/{job_id}/process-advanced")
 def process_job_advanced(
     job_id: int,
@@ -59,12 +131,13 @@ def process_job_advanced(
         .first()
     )
 
-    print(
-        f"[ADV-ROUTE] job encontrado id={job.id} user_id={current_user.id}", flush=True
-    )
-
     if not job:
         raise HTTPException(status_code=404, detail="Job não encontrado.")
+
+    print(
+        f"[ADV-ROUTE] job encontrado id={job.id} user_id={current_user.id}",
+        flush=True,
+    )
 
     try:
         job.session_date = payload.session_date
@@ -76,7 +149,8 @@ def process_job_advanced(
         db.refresh(job)
 
         print(
-            f"[ADV-ROUTE] janela recebida: {payload.session_date} {payload.start_time} -> {payload.end_time}",
+            f"[ADV-ROUTE] janela recebida: "
+            f"{payload.session_date} {payload.start_time} -> {payload.end_time}",
             flush=True,
         )
 
@@ -101,7 +175,8 @@ def process_job_advanced(
         earthdata_password = _decode_optional_base64(earthdata_password_raw)
 
         print(
-            f"[ADV-ROUTE] credentials found={bool(credentials)} user={earthdata_username} has_password={bool(earthdata_password)}",
+            f"[ADV-ROUTE] credentials found={bool(credentials)} "
+            f"user={earthdata_username} has_password={bool(earthdata_password)}",
             flush=True,
         )
         print("[ADV-ROUTE] chamando process_real_vrs_advanced...", flush=True)

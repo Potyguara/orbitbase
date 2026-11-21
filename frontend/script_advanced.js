@@ -49,13 +49,18 @@ async function apiFetch(url, options = {}) {
 
 async function apiFetchAdvanced(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
-  const useJson = method !== "GET";
+  const useJson = method !== "GET" && !(options.body instanceof FormData);
+
+  const extraHeaders = { ...(options.headers || {}) };
+  if (options.body instanceof FormData && extraHeaders["Content-Type"]) {
+    delete extraHeaders["Content-Type"];
+  }
 
   return apiFetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
       ...getAuthHeaders(useJson),
-      ...(options.headers || {}),
+      ...extraHeaders,
     },
   });
 }
@@ -126,15 +131,27 @@ async function ensureEarthdataConfigured() {
     headers: getAuthHeaders(false),
   });
 
-if (!data.earthdata_configured) {
-  alert(
-    "Configure suas credenciais Earthdata / CDDIS no perfil antes de usar o modo avançado."
-  );
-  window.location.href = "./profile.html?from=advanced";
-  throw new Error("Credenciais Earthdata / CDDIS não configuradas.");
-}
+  if (!data.earthdata_configured) {
+    alert(
+      "Configure suas credenciais Earthdata / CDDIS no perfil antes de usar o modo avançado sem upload manual de SP3."
+    );
+    window.location.href = "./profile.html?from=advanced";
+    throw new Error("Credenciais Earthdata / CDDIS não configuradas.");
+  }
 
   return true;
+}
+
+function getAdvancedSp3Files() {
+  const input = document.getElementById("advanced-sp3-file");
+  if (!input || !input.files) return [];
+  return Array.from(input.files);
+}
+
+function formatAdvancedFileList(files) {
+  if (!files.length) return "Nenhum arquivo selecionado.";
+  if (files.length === 1) return `1 arquivo selecionado: ${files[0].name}`;
+  return `${files.length} arquivos selecionados: ${files.map((f) => f.name).join(", ")}`;
 }
 
 function buildAdvancedPayload() {
@@ -183,23 +200,86 @@ function validateAdvancedForm(jobId, payload) {
     throw new Error("Informe a hora final.");
   }
 
-  if (!payload.advanced_config.target_step_seconds || payload.advanced_config.target_step_seconds <= 0) {
+  if (
+    !payload.advanced_config.target_step_seconds ||
+    payload.advanced_config.target_step_seconds <= 0
+  ) {
     throw new Error("Informe um passo temporal alvo válido.");
   }
 }
 
+async function uploadAdvancedEphemeris(jobId, sessionDate, files) {
+  if (!files || !files.length) {
+    return {
+      ok: true,
+      uploaded: false,
+      file_count: 0,
+      message: "Nenhuma efeméride enviada.",
+    };
+  }
+
+  const formData = new FormData();
+  formData.append("session_date", sessionDate);
+
+  for (const file of files) {
+    formData.append("files", file);
+  }
+
+  showAdvancedMessage(`Enviando ${files.length} efeméride(s) do dia...`);
+  setAdvancedProgress(
+    6,
+    "Upload manual de efemérides",
+    formatAdvancedFileList(files)
+  );
+
+  const result = await apiFetchAdvanced(
+    `/jobs/${jobId}/advanced-ephemeris-upload`,
+    {
+      method: "POST",
+      body: formData,
+    }
+  );
+
+  return {
+    ok: true,
+    uploaded: true,
+    file_count: files.length,
+    response: result,
+    message:
+      result?.message ||
+      `${files.length} efeméride(s) enviada(s) com sucesso.`,
+  };
+}
+
 async function processAdvancedJob(jobId) {
   const payload = buildAdvancedPayload();
+  const sp3Files = getAdvancedSp3Files();
 
   validateAdvancedForm(jobId, payload);
 
   clearAdvancedMessage();
-  showAdvancedMessage("Iniciando processamento avançado...");
-  setAdvancedProgress(2, "Iniciando...", "Preparando requisição.");
-
   stopAdvancedPolling();
 
-  // consulta imediata
+  const wantsPreciseEphemeris = !!payload.advanced_config.use_precise_ephemeris;
+  const hasManualSp3 = sp3Files.length > 0;
+
+  if (wantsPreciseEphemeris && !hasManualSp3) {
+    await ensureEarthdataConfigured();
+  }
+
+  if (hasManualSp3) {
+    await uploadAdvancedEphemeris(jobId, payload.session_date, sp3Files);
+  }
+
+  showAdvancedMessage("Iniciando processamento avançado...");
+  setAdvancedProgress(
+    10,
+    "Iniciando...",
+    hasManualSp3
+      ? `Efemérides carregadas manualmente. ${formatAdvancedFileList(sp3Files)}`
+      : "Preparando requisição."
+  );
+
   await pollAdvancedProgress(jobId);
 
   advancedPollingTimer = setInterval(() => {
@@ -212,7 +292,6 @@ async function processAdvancedJob(jobId) {
       body: JSON.stringify(payload),
     });
 
-    // consulta final logo após concluir
     await pollAdvancedProgress(jobId);
 
     showAdvancedMessage(result.message || "Processamento avançado concluído.");
@@ -220,7 +299,10 @@ async function processAdvancedJob(jobId) {
   } catch (error) {
     stopAdvancedPolling();
     console.error("ERRO POST process-advanced:", error);
-    showAdvancedMessage(error.message || "Falha no processamento avançado.", true);
+    showAdvancedMessage(
+      error.message || "Falha no processamento avançado.",
+      true
+    );
     throw error;
   }
 }
@@ -243,19 +325,37 @@ function bindAdvancedTopbarButtons() {
     });
   }
 
-const profileBtn = document.getElementById("go-profile-btn");
-if (profileBtn) {
-  profileBtn.addEventListener("click", () => {
-    stopAdvancedPolling();
-    window.location.href = "./profile.html?from=advanced";
-  });
+  const profileBtn = document.getElementById("go-profile-btn");
+  if (profileBtn) {
+    profileBtn.addEventListener("click", () => {
+      stopAdvancedPolling();
+      window.location.href = "./profile.html?from=advanced";
+    });
+  }
 }
+
+function bindAdvancedSp3Input() {
+  const input = document.getElementById("advanced-sp3-file");
+  if (!input) return;
+
+  input.addEventListener("change", () => {
+    const files = getAdvancedSp3Files();
+    clearAdvancedMessage();
+
+    if (!files.length) {
+      showAdvancedMessage("Nenhuma efeméride selecionada.");
+      return;
+    }
+
+    showAdvancedMessage(formatAdvancedFileList(files));
+  });
 }
 
 function initAdvancedDashboardPage() {
   if (!isAdvancedPage()) return;
 
   bindAdvancedTopbarButtons();
+  bindAdvancedSp3Input();
 
   const token = getToken();
   if (!token) {
@@ -273,8 +373,6 @@ function initAdvancedDashboardPage() {
     event.preventDefault();
 
     try {
-      await ensureEarthdataConfigured();
-
       const jobId = Number(
         document.getElementById("advanced-job-id")?.value || 0
       );
