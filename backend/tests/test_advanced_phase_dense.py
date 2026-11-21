@@ -1,7 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
 from app.services.vrs_advanced.advanced_observation_interpolation_service import (
-    _geometric_range,
+    _choose_master_base,
+    _geodetic_lat_h,
+    _range_with_tropo,
+    _slant_tropo_delay,
     _gps_wavelength,
     interpolate_advanced_observations,
 )
@@ -33,7 +36,7 @@ def _residual(sat: str, t: datetime) -> float:
 
 
 def _obs(sat: str, t: datetime, xyz=MASTER) -> dict:
-    rho = _geometric_range(xyz, _sat_at(sat, t))
+    rho = _range_with_tropo(xyz, _sat_at(sat, t))
     r = _residual(sat, t)
     return {
         "C1": rho + r, "P2": rho + r + 2.0,
@@ -122,3 +125,30 @@ def test_phase_dense_drops_satellite_with_cycle_slip():
     assert "G12" in by_epoch["2026-08-20T07:05:35Z"]
     assert "G12" in by_epoch["2026-08-20T07:06:00Z"]
     assert len(by_epoch["2026-08-20T07:05:45Z"]) == len(SATS) - 1
+
+
+def _fake_base(code, xyz, dual_phase_epochs):
+    rec = {"C1": 1.0, "P2": 1.0, "L1": 1.0, "L2": 1.0}
+    return {"station_code": code, "xyz": xyz,
+            "epochs": [{"obs_map": {"G05": rec}} for _ in range(dual_phase_epochs)]}
+
+
+def test_master_is_nearest_base_with_enough_quality():
+    target = (3982061.76, -4982280.21, 24728.85)
+    apma = _fake_base("APMA", (4005474.1188, -4963530.7910, 5200.8584), 1400)
+    boav = _fake_base("BOAV", (3117452.2165, -5555487.8182, 314480.7389), 1540)
+    weak = _fake_base("NEAR", (3982100.0, -4982300.0, 24700.0), 100)
+    chosen = _choose_master_base([boav, weak, apma], target)
+    assert chosen["station_code"] == "APMA"
+
+
+def test_tropo_delay_is_sane():
+    target = (3982061.76, -4982280.21, 24728.85)
+    _, _, h = _geodetic_lat_h(target)
+    assert -20.0 < h < 10.0
+    # satélite no zênite (~20.000 km acima) e outro baixo no horizonte
+    zenith = {"x": target[0] * 4.2, "y": target[1] * 4.2, "z": target[2] * 4.2}
+    low = {"x": 15_600_000.0, "y": -10_200_000.0, "z": 19_100_000.0}
+    dz = _slant_tropo_delay(target, zenith)
+    assert 2.3 < dz < 2.8
+    assert _slant_tropo_delay(target, low) > dz
