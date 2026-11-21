@@ -277,8 +277,12 @@ def _build_effective_time_grid(
     ]
 
     if not valid_bases:
+        start = time_grid[0].isoformat() if time_grid else "?"
+        end = time_grid[-1].isoformat() if time_grid else "?"
         raise ValueError(
-            "Nenhuma base possui épocas válidas após a normalização do base_numeric_data."
+            "Nenhuma base RBMC tem observações na janela pedida "
+            f"({start} a {end} UTC). Confira se a data e os horários correspondem "
+            "ao dia dos arquivos RBMC do job."
         )
 
     common_start = max(b["first_epoch"] for b in valid_bases)

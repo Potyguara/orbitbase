@@ -184,6 +184,37 @@ function buildAdvancedPayload() {
   };
 }
 
+let advancedJobsCache = null;
+
+async function getAdvancedJob(jobId) {
+  if (!advancedJobsCache) {
+    const data = await apiFetchAdvanced("/jobs", { method: "GET" });
+    advancedJobsCache = Array.isArray(data) ? data : (data?.jobs || data?.items || []);
+  }
+  return advancedJobsCache.find((job) => Number(job.id) === Number(jobId)) || null;
+}
+
+// Preenche a data/horários com os do job e impede rodar numa data diferente
+// da dos arquivos RBMC do job (o erro era "Nenhuma base possui épocas válidas").
+async function fillAdvancedFormFromJob(jobId) {
+  if (!jobId) return;
+  try {
+    const job = await getAdvancedJob(jobId);
+    if (!job) return;
+    const dateInput = document.getElementById("advanced-session-date");
+    if (dateInput && job.session_date) dateInput.value = String(job.session_date).slice(0, 10);
+    for (const [id, field] of [["advanced-start-time", "start_time"], ["advanced-end-time", "end_time"]]) {
+      const input = document.getElementById(id);
+      if (input && !input.value.trim() && job[field]) {
+        const value = String(job[field]);
+        input.value = value.length === 5 ? `${value}:00` : value;
+      }
+    }
+  } catch (error) {
+    console.warn("Não foi possível carregar os dados do job:", error);
+  }
+}
+
 function validateAdvancedForm(jobId, payload) {
   if (!jobId || Number.isNaN(jobId) || jobId <= 0) {
     throw new Error("Informe um ID de job válido.");
@@ -370,6 +401,12 @@ function initAdvancedDashboardPage() {
   const form = document.getElementById("advanced-job-form");
   if (!form) return;
 
+  const jobIdInput = document.getElementById("advanced-job-id");
+  jobIdInput?.addEventListener("change", () => {
+    fillAdvancedFormFromJob(Number(jobIdInput.value || 0));
+  });
+  if (jobIdInput?.value) fillAdvancedFormFromJob(Number(jobIdInput.value));
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
@@ -378,7 +415,18 @@ function initAdvancedDashboardPage() {
         document.getElementById("advanced-job-id")?.value || 0
       );
 
+      const job = await getAdvancedJob(jobId).catch(() => null);
+      const jobDate = job?.session_date ? String(job.session_date).slice(0, 10) : "";
+      const formDate = document.getElementById("advanced-session-date")?.value || "";
+      if (jobDate && formDate && jobDate !== formDate) {
+        throw new Error(
+          `A data informada (${formDate}) é diferente da data do job ${jobId} (${jobDate}). ` +
+          "As bases RBMC do job são desse dia; corrija a data ou crie um job novo."
+        );
+      }
+
       await processAdvancedJob(jobId);
+      advancedJobsCache = null;
     } catch (error) {
       console.error("Falha no modo avançado:", error);
       showAdvancedMessage(
