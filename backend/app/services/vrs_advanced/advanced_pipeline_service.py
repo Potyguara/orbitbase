@@ -264,6 +264,28 @@ def _base_extraction_window(window: dict) -> tuple[datetime, datetime]:
     return window["start_utc"] - pad, window["end_utc"] + pad
 
 
+def _merge_base_epochs_into_grid(
+    time_grid: list[datetime], base_numeric_data: list[dict], window: dict
+) -> list[datetime]:
+    lo, hi = _base_extraction_window(window)
+    merged = set(time_grid)
+    for base in base_numeric_data or []:
+        for ep in base.get("epochs") or []:
+            raw = ep.get("epoch") or ep.get("epoch_utc")
+            if isinstance(raw, str):
+                try:
+                    raw = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+            if not isinstance(raw, datetime):
+                continue
+            if raw.tzinfo is None:
+                raw = raw.replace(tzinfo=timezone.utc)
+            if lo <= raw <= hi:
+                merged.add(raw)
+    return sorted(merged)
+
+
 def _build_effective_time_grid(
     time_grid: list[datetime],
     base_numeric_data: list[dict],
@@ -932,8 +954,16 @@ def process_real_vrs_advanced(
         "Preparando geometria com efemérides precisas",
     )
 
+    geometry_time_grid = effective_time_grid
+    if cfg.get("interpolate_phase_observables"):
+        # O modo com fase interpola entre épocas da base mestra (inclusive as da
+        # margem antes/depois da janela), então elas também precisam de geometria.
+        geometry_time_grid = _merge_base_epochs_into_grid(
+            effective_time_grid, base_numeric_data, window
+        )
+
     geometry_cache = build_precise_geometry_cache(
-        time_grid=effective_time_grid,
+        time_grid=geometry_time_grid,
         precise_products=precise_products,
         navigation_context=nav_context,
     )

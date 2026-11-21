@@ -599,6 +599,145 @@ def _allowed_systems_from_config(config: dict, phase_mode: bool) -> set[str]:
     return {"G"} if phase_mode else {"G", "R"}
 
 
+# Salto máximo aceito no resíduo (observável - distância geométrica) entre duas
+# épocas da base mestra. Acima disso há perda de ciclo ou salto de relógio do
+# receptor, e a interpolação no tempo seria inválida.
+PHASE_RESIDUAL_MAX_JUMP_M = 1000.0
+_DENSE_CODE_KEYS = ("C1", "P1", "C2", "P2")
+_DENSE_PHASE_KEYS = ("L1", "L2")
+
+
+def _residuals_at_master_epoch(rec: dict, sat_xyz: dict, master_xyz) -> dict | None:
+    """Observáveis em metros menos a distância geométrica base-satélite."""
+    rho = _geometric_range(master_xyz, sat_xyz)
+    if rho is None:
+        return None
+    out: dict[str, float] = {}
+    for key in _DENSE_CODE_KEYS:
+        value = _safe_float(rec.get(key))
+        if value is not None:
+            out[key] = value - rho
+    for key in _DENSE_PHASE_KEYS:
+        value = _safe_float(rec.get(key))
+        wavelength = _gps_wavelength(key)
+        if value is not None and wavelength:
+            out[key] = value * wavelength - rho
+    for key in ("S1", "S2"):
+        value = _safe_float(rec.get(key))
+        if value is not None:
+            out[key] = value
+    return out
+
+
+def _build_output_epochs_phase_dense(
+    master_base: dict,
+    geometry_epoch_map: dict[str, dict],
+    target_xyz: tuple[float, float, float],
+    time_grid: list[datetime],
+    max_gap_seconds: float,
+    min_satellites_per_epoch: int,
+) -> tuple[list[dict], int]:
+    """Fase GPS na grade pedida (ex.: 1 s) a partir da base mestra (ex.: 15 s).
+
+    Para cada satélite, o resíduo r = observável·λ - ρ(base, sat) varia devagar
+    (relógios, atmosfera, ambiguidade constante). Ele é interpolado linearmente
+    entre as duas épocas da mestra que cercam t, e o observável virtual é
+    r(t) + ρ(alvo, sat, t), com a geometria do satélite no próprio instante t.
+    """
+    master_xyz = master_base["xyz"]
+    master_epochs = [ep for ep in (master_base.get("epochs") or []) if ep.get("epoch")]
+    epoch_times = [ep["epoch"] for ep in master_epochs]
+    residual_cache: dict[int, dict[str, dict]] = {}
+
+    def residuals(idx: int) -> dict[str, dict]:
+        if idx not in residual_cache:
+            ep = master_epochs[idx]
+            geom = geometry_epoch_map.get(ep["epoch_iso"]) or {}
+            out = {}
+            for sat, rec in (ep.get("obs_map") or {}).items():
+                if not str(sat).startswith("G") or sat not in geom:
+                    continue
+                if not _obs_has_dual_phase_gps(rec):
+                    continue
+                r = _residuals_at_master_epoch(rec, geom[sat], master_xyz)
+                if r:
+                    out[sat] = r
+            residual_cache[idx] = out
+            # mantém só uma janela pequena em memória
+            for old in [k for k in residual_cache if k < idx - 2]:
+                residual_cache.pop(old, None)
+        return residual_cache[idx]
+
+    output_epochs: list[dict] = []
+    epochs_skipped = 0
+
+    for target in time_grid:
+        target_iso = _epoch_to_iso(target)
+        geom_t = geometry_epoch_map.get(target_iso) or {}
+        idx = bisect_left(epoch_times, target)
+
+        if idx < len(epoch_times) and epoch_times[idx] == target:
+            i0 = i1 = idx
+            alpha = 0.0
+        else:
+            i0, i1 = idx - 1, idx
+            if i0 < 0 or i1 >= len(epoch_times):
+                epochs_skipped += 1
+                continue
+            gap = (epoch_times[i1] - epoch_times[i0]).total_seconds()
+            if gap <= 0 or gap > max_gap_seconds:
+                epochs_skipped += 1
+                continue
+            alpha = (target - epoch_times[i0]).total_seconds() / gap
+
+        r0 = residuals(i0)
+        r1 = residuals(i1)
+        observations = []
+
+        for sat in sorted(set(r0) & set(r1)):
+            if sat not in geom_t:
+                continue
+            rho_t = _geometric_range(target_xyz, geom_t[sat])
+            if rho_t is None:
+                continue
+            a, b = r0[sat], r1[sat]
+            out: dict[str, float] = {}
+            jump = False
+            for key in _DENSE_CODE_KEYS + _DENSE_PHASE_KEYS:
+                if key not in a or key not in b:
+                    continue
+                if abs(b[key] - a[key]) > PHASE_RESIDUAL_MAX_JUMP_M:
+                    jump = True
+                    break
+                meters = a[key] + (b[key] - a[key]) * alpha + rho_t
+                if key in _DENSE_PHASE_KEYS:
+                    out[key] = meters / _gps_wavelength(key)
+                else:
+                    out[key] = meters
+            if jump:
+                continue
+            for key in ("S1", "S2"):
+                if key in a and key in b:
+                    out[key] = a[key] + (b[key] - a[key]) * alpha
+            if not _obs_has_dual_phase_gps(out):
+                continue
+            observations.append({"satellite": sat, **out})
+
+        if len(observations) < min_satellites_per_epoch:
+            epochs_skipped += 1
+            continue
+
+        output_epochs.append(
+            {
+                "epoch": target_iso,
+                "observations": observations,
+                "satellite_count": len(observations),
+            }
+        )
+
+    return output_epochs, epochs_skipped
+
+
 def _build_output_epochs_phase_mode(
     master_base: dict,
     geometry_epoch_map: dict[str, dict],
@@ -916,8 +1055,12 @@ def interpolate_advanced_observations(
                     "summary": {},
                 }
 
-            normalized_time_grid = _build_master_time_grid(master_base)
-            output_step_seconds = native_interval
+            requested_step = float(config.get("target_step_seconds", native_interval) or native_interval)
+            dense_phase = requested_step < native_interval
+            normalized_time_grid = (
+                requested_time_grid if dense_phase else _build_master_time_grid(master_base)
+            )
+            output_step_seconds = requested_step if dense_phase else native_interval
 
             print(
                 f"[ADV-INT] requested_time_grid={len(requested_time_grid)} "
@@ -928,18 +1071,28 @@ def interpolate_advanced_observations(
                 flush=True,
             )
 
-            output_epochs, epochs_skipped = _build_output_epochs_phase_mode(
-                master_base=master_base,
-                geometry_epoch_map=geometry_epoch_map,
-                target_xyz=target_xyz,
-                min_satellites_per_epoch=min_satellites_per_epoch,
-            )
+            if dense_phase:
+                output_epochs, epochs_skipped = _build_output_epochs_phase_dense(
+                    master_base=master_base,
+                    geometry_epoch_map=geometry_epoch_map,
+                    target_xyz=target_xyz,
+                    time_grid=requested_time_grid,
+                    max_gap_seconds=max_gap_seconds,
+                    min_satellites_per_epoch=min_satellites_per_epoch,
+                )
+            else:
+                output_epochs, epochs_skipped = _build_output_epochs_phase_mode(
+                    master_base=master_base,
+                    geometry_epoch_map=geometry_epoch_map,
+                    target_xyz=target_xyz,
+                    min_satellites_per_epoch=min_satellites_per_epoch,
+                )
 
             summary = {
-                "mode": "phase_master_only",
+                "mode": "phase_master_dense" if dense_phase else "phase_master_only",
                 "master_station_code": master_base.get("station_code"),
                 "native_interval_seconds": native_interval,
-                "target_step_seconds": native_interval,
+                "target_step_seconds": output_step_seconds,
                 "max_interpolation_gap_seconds": max_gap_seconds,
                 "min_satellites_per_epoch": min_satellites_per_epoch,
                 "geometry_status": geometry_cache.get("status"),
