@@ -7,7 +7,8 @@
    ========================================================= */
 
 //const API_BASE_URL = "https://84a4-191-6-124-131.ngrok-free.app";
-const API_BASE_URL = "http://127.0.0.1:8000";
+// Local (Live Server / arquivo): API em 127.0.0.1:8000. Em produção: mesma origem, prefixo /api.
+const API_BASE_URL = (["localhost", "127.0.0.1", ""].includes(window.location.hostname) ? "http://127.0.0.1:8000" : `${window.location.origin}/api`);
 
 let orbitbaseMap = null;
 let previewTargetMarker = null;

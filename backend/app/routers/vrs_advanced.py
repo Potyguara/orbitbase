@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.deps import get_current_user, get_db
 from app.models import User, VRSJob, UserAdvancedCredentials
 from app.services.vrs_advanced.advanced_ephemeris_service import (
@@ -173,6 +174,11 @@ def process_job_advanced(
         )
 
         earthdata_password = _decode_optional_base64(earthdata_password_raw)
+
+        if not (earthdata_username and earthdata_password):
+            if settings.earthdata_username and settings.earthdata_password:
+                earthdata_username = settings.earthdata_username.strip()
+                earthdata_password = settings.earthdata_password
 
         print(
             f"[ADV-ROUTE] credentials found={bool(credentials)} "

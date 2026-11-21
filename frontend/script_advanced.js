@@ -1,4 +1,5 @@
-const API_BASE = "http://127.0.0.1:8000";
+// Local (Live Server / arquivo): API em 127.0.0.1:8000. Em produção: mesma origem, prefixo /api.
+const API_BASE = (["localhost", "127.0.0.1", ""].includes(window.location.hostname) ? "http://127.0.0.1:8000" : `${window.location.origin}/api`);
 const TOKEN_KEY = "orbitbase_token";
 
 let advancedPollingTimer = null;
