@@ -4,6 +4,7 @@
 #   KEEP_DAYS  dias de backups do banco mantidos (padrão 14)
 #   PROC_DAYS  apaga pastas de storage/processing sem alteração há N dias (padrão 30; 0 desliga)
 set -euo pipefail
+umask 077   # o banco contém a tabela de usuários
 APP_DIR="${APP_DIR:-/opt/orbitbase}"
 DEST="${DEST:-/root/orbitbase-backups/db}"
 KEEP_DAYS="${KEEP_DAYS:-14}"
@@ -11,7 +12,7 @@ PROC_DAYS="${PROC_DAYS:-30}"
 DATA="$APP_DIR/deploy/data"
 STAMP="$(date +%Y%m%d-%H%M)"
 
-mkdir -p "$DEST"
+mkdir -p "$DEST" && chmod 700 "$(dirname "$DEST")" "$DEST"
 # Usa a API de backup do SQLite dentro do container (cópia consistente mesmo com o app rodando).
 docker exec orbitbase-backend-1 python -c "
 import sqlite3
