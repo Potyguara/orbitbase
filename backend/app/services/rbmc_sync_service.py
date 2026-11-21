@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import threading
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -370,7 +371,23 @@ def _upsert_station(
     return station
 
 
+class RbmcSyncInProgress(RuntimeError):
+    pass
+
+
+_SYNC_LOCK = threading.Lock()
+
+
 def sync_rbmc_stations(db: Session, storage_root: str) -> dict:
+    if not _SYNC_LOCK.acquire(blocking=False):
+        raise RbmcSyncInProgress("Já existe uma sincronização RBMC em andamento.")
+    try:
+        return _sync_rbmc_stations(db, storage_root)
+    finally:
+        _SYNC_LOCK.release()
+
+
+def _sync_rbmc_stations(db: Session, storage_root: str) -> dict:
     flags = _extract_station_lists_from_filename_list()
 
     reports_dir = Path(storage_root) / "rbmc_reports"
@@ -392,7 +409,7 @@ def sync_rbmc_stations(db: Session, storage_root: str) -> dict:
             if not raw_text.strip():
                 raise ValueError("Não foi possível extrair texto do PDF.")
 
-            station_data = parse_rbmc_station_report_text(raw_text)
+            station_data = parse_rbmc_station_report_text(raw_text, file_name=file_name)
 
             station_code = (station_data.get("station_code") or "").strip().upper()
             if not station_code:
@@ -417,7 +434,9 @@ def sync_rbmc_stations(db: Session, storage_root: str) -> dict:
                 flags=flags,
             )
 
-            db.flush()
+            # Commit por estação: uma falha não desfaz as anteriores e o lock do
+            # SQLite fica curto.
+            db.commit()
 
             if existing:
                 updated += 1
