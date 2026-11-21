@@ -167,8 +167,13 @@ function finishProcessingModal(progress, isError = false) {
   processingModalCloseBtn.classList.remove("hidden");
 }
 
-processingModalCloseBtn?.addEventListener("click", () => {
+processingModalCloseBtn?.addEventListener("click", async () => {
   closeProcessingModal();
+  try {
+    await refreshJobsTableSafe();
+  } catch (error) {
+    console.error("Erro ao atualizar jobs:", error);
+  }
 });
 
 
@@ -1264,6 +1269,12 @@ window.handleValidateNetwork = async function (jobId) {
 };
 
 async function refreshJobsTableSafe() {
+  // loadDashboard busca e RENDERIZA a tabela (fetchJobs só busca os dados),
+  // assim o botão Exportar habilita sem precisar recarregar a página.
+  if (typeof loadDashboard === "function") {
+    return await loadDashboard();
+  }
+
   if (typeof loadJobs === "function") {
     return await loadJobs();
   }
