@@ -13,6 +13,10 @@ from sqlalchemy.orm import Session
 
 from app.models import GnssStation
 from app.services.hatanaka_service import convert_hatanaka_to_rinex
+from app.services.rinex_nav_satpos_service import (
+    is_gps_navigation_filename,
+    navigation_file_priority,
+)
 import os
 from urllib.request import urlretrieve
 
@@ -130,19 +134,18 @@ def _find_station_files(station_code: str, session_date: str) -> dict:
 
             lower = path.name.lower()
 
-            # observação
-            if lower.endswith((".obs", ".rnx", ".o", ".d")) or re.search(
+            # navegação GPS (.yyn, .yyp, _GN.rnx, _MN.rnx, brdc*, .nav)
+            if is_gps_navigation_filename(path.name):
+                nav_candidates.append(path)
+                continue
+
+            # observação (inclui _MO.rnx; exclui NAV .rnx de outros sistemas)
+            if lower.endswith((".obs", ".o", ".d")) or re.search(
                 r"\.\d{2}[od]$", lower
             ):
                 obs_candidates.append(path)
-
-            # navegação
-            if (
-                lower.endswith((".nav",))
-                or re.search(r"\.\d{2}[ngl]$", lower)
-                or "brdc" in lower
-            ):
-                nav_candidates.append(path)
+            elif lower.endswith(".rnx") and re.search(r"_[a-z]o\.rnx$", lower):
+                obs_candidates.append(path)
 
     def _dedupe(paths: list[Path]) -> list[Path]:
         seen = set()
@@ -167,21 +170,7 @@ def _find_station_files(station_code: str, session_date: str) -> dict:
         )
     )
 
-    # prioriza .n, depois .g, depois .l
-    nav_candidates.sort(
-        key=lambda p: (
-            (
-                0
-                if re.search(r"\.\d{2}n$", p.name.lower())
-                else (
-                    1
-                    if re.search(r"\.\d{2}g$", p.name.lower())
-                    else 2 if re.search(r"\.\d{2}l$", p.name.lower()) else 3
-                )
-            ),
-            len(p.name),
-        )
-    )
+    nav_candidates.sort(key=navigation_file_priority)
 
     return {
         "day_root": day_root,

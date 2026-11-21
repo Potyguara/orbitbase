@@ -6,9 +6,18 @@ from pathlib import Path
 from typing import Any
 
 from app.services.rinex_nav_satpos_service import (
-    build_satellite_position_cache_from_nav,
+    build_satellite_position_cache_from_records,
     detect_navigation_file_near_observation,
+    is_gps_navigation_filename,
+    merge_navigation_records,
+    navigation_file_priority,
 )
+
+# Interpolação de Lagrange para SP3 (padrão IGS: 10 nós, grau 9).
+SP3_LAGRANGE_POINTS = 10
+# Máximo de lacuna permitida entre nós SP3 consecutivos usados na janela.
+SP3_MAX_NODE_GAP_SECONDS = 1800.0
+SP3_BAD_CLOCK = 999999.0
 
 
 def _ensure_utc_datetime(value: Any) -> datetime | None:
@@ -112,12 +121,17 @@ def _parse_sp3_position_line(line: str) -> tuple[str, dict[str, float | None]] |
         clk_us = _safe_float(line[46:60].strip(), None)
 
         if x_km is None or y_km is None or z_km is None:
-            print(
-                "[ADV-SP3-POS] coordenada inválida "
-                f"sat={sat} x={x_km} y={y_km} z={z_km} line={line!r}",
-                flush=True,
-            )
             return None
+
+        # SP3 usa 0.000000 para posição ausente e 999999.999999 para relógio ausente.
+        if abs(x_km) < 1e-9 and abs(y_km) < 1e-9 and abs(z_km) < 1e-9:
+            return None
+        if clk_us is not None and abs(clk_us) >= SP3_BAD_CLOCK:
+            clk_us = None
+
+        sat = sat.replace(" ", "0")
+        if len(sat) == 2:
+            sat = sat[0] + "0" + sat[1]
 
         return sat, {
             "x": x_km * 1000.0,
@@ -257,41 +271,91 @@ def _interpolate_scalar(
     return v0 + (v1 - v0) * alpha
 
 
+def _lagrange(xs: list[float], ys: list[float], x: float) -> float:
+    total = 0.0
+    n = len(xs)
+    for i in range(n):
+        term = ys[i]
+        xi = xs[i]
+        for j in range(n):
+            if j != i:
+                term *= (x - xs[j]) / (xi - xs[j])
+        total += term
+    return total
+
+
+def _lagrange_window(
+    times: list[datetime], target_epoch: datetime, points: int
+) -> tuple[int, int] | None:
+    n = len(times)
+    if n < 2:
+        return None
+    points = min(points, n)
+    idx = bisect_left(times, target_epoch)
+    lo = max(0, idx - points // 2)
+    hi = lo + points
+    if hi > n:
+        hi = n
+        lo = max(0, hi - points)
+    return lo, hi
+
+
 def _interpolate_satellite_position(
     series: list[tuple[datetime, dict]],
     target_epoch: datetime,
+    points: int = SP3_LAGRANGE_POINTS,
 ) -> dict | None:
+    """
+    Interpola posição (Lagrange grau 9) e velocidade (derivada numérica do
+    mesmo polinômio) do satélite. O antigo método linear entre nós de 15 min
+    produzia erros de dezenas de km na posição orbital.
+    """
     if not series:
         return None
 
     times = [item[0] for item in series]
+
+    if target_epoch < times[0] or target_epoch > times[-1]:
+        return None
+
+    window = _lagrange_window(times, target_epoch, points)
+    if window is None:
+        return None
+    lo, hi = window
+
+    if hi - lo < min(points, 4):
+        return None
+
+    ref = times[lo]
+    xs = [(times[k] - ref).total_seconds() for k in range(lo, hi)]
+
+    for k in range(1, len(xs)):
+        if xs[k] - xs[k - 1] > SP3_MAX_NODE_GAP_SECONDS:
+            return None
+
+    t = (target_epoch - ref).total_seconds()
+    out: dict[str, Any] = {}
+    for axis in ("x", "y", "z"):
+        ys = [series[k][1][axis] for k in range(lo, hi)]
+        out[axis] = _lagrange(xs, ys, t)
+        out["v" + axis] = (_lagrange(xs, ys, t + 0.5) - _lagrange(xs, ys, t - 0.5))
+
+    # Relógio: interpolação linear entre os nós vizinhos (não é suave).
     idx = bisect_left(times, target_epoch)
-
     if idx < len(times) and times[idx] == target_epoch:
-        pos = dict(series[idx][1])
-        pos["interpolated"] = False
-        return pos
+        out["clock_us"] = series[idx][1].get("clock_us")
+        out["interpolated"] = False
+    else:
+        t0, p0 = series[idx - 1]
+        t1, p1 = series[idx]
+        span = (t1 - t0).total_seconds()
+        alpha = (target_epoch - t0).total_seconds() / span if span > 0 else 0.0
+        out["clock_us"] = _interpolate_scalar(
+            p0.get("clock_us"), p1.get("clock_us"), alpha
+        )
+        out["interpolated"] = True
 
-    if idx == 0 or idx >= len(times):
-        return None
-
-    t0, p0 = series[idx - 1]
-    t1, p1 = series[idx]
-
-    dt_total = (t1 - t0).total_seconds()
-    if dt_total <= 0:
-        return None
-
-    dt_target = (target_epoch - t0).total_seconds()
-    alpha = dt_target / dt_total
-
-    return {
-        "x": _interpolate_scalar(p0.get("x"), p1.get("x"), alpha),
-        "y": _interpolate_scalar(p0.get("y"), p1.get("y"), alpha),
-        "z": _interpolate_scalar(p0.get("z"), p1.get("z"), alpha),
-        "clock_us": _interpolate_scalar(p0.get("clock_us"), p1.get("clock_us"), alpha),
-        "interpolated": True,
-    }
+    return out
 
 
 def _normalize_time_grid(time_grid: list) -> list[datetime]:
@@ -433,7 +497,7 @@ def _build_sp3_geometry_cache(
         "epochs_requested": len(normalized_time_grid),
         "epochs_with_geometry": epochs_with_geometry,
         "status": "completed" if epochs_with_geometry > 0 else "no_geometry_generated",
-        "source": "sp3_linear_interpolation",
+        "source": "sp3_lagrange_interpolation",
         "sp3_path": str(sp3_path),
         "products": precise_products,
         "navigation_context_count": len(navigation_context or []),
@@ -446,35 +510,7 @@ def _build_sp3_geometry_cache(
 
 
 def _looks_like_navigation_filename(path: Path) -> bool:
-    name = path.name.lower()
-
-    if name.startswith("brdc"):
-        return True
-
-    nav_suffixes = (
-        ".nav",
-        ".n",
-        ".g",
-        ".p",
-        ".rnx",
-        ".26n",
-        ".25n",
-        ".24n",
-        ".23n",
-        ".26g",
-        ".25g",
-        ".24g",
-        ".23g",
-        ".26p",
-        ".25p",
-        ".24p",
-        ".23p",
-    )
-
-    if name.endswith(nav_suffixes):
-        return True
-
-    return False
+    return is_gps_navigation_filename(path.name)
 
 
 def _collect_nav_candidates(navigation_context: list[dict]) -> list[Path]:
@@ -512,6 +548,10 @@ def _collect_nav_candidates(navigation_context: list[dict]) -> list[Path]:
         ):
             add_candidate(item.get(key))
 
+        for key in ("nav_paths", "navigation_files"):
+            for value in item.get(key) or []:
+                add_candidate(value)
+
         for key in (
             "obs_path",
             "observation_path",
@@ -528,14 +568,12 @@ def _collect_nav_candidates(navigation_context: list[dict]) -> list[Path]:
             if detected:
                 add_candidate(detected)
 
+    candidates.sort(key=navigation_file_priority)
+
     print(
         f"[ADV-GEO] nav_candidates={len(candidates)} -> {[str(p) for p in candidates]}",
         flush=True,
     )
-
-    for item in navigation_context or []:
-        if isinstance(item, dict):
-            print(f"[ADV-GEO] nav_context_item={item}", flush=True)
 
     return candidates
 
@@ -562,96 +600,102 @@ def _build_nav_geometry_cache(
             "source": "broadcast_nav",
             "products": precise_products,
             "navigation_context_count": len(navigation_context or []),
+            "nav_candidates": [],
+            "errors": [
+                "Nenhum arquivo NAV GPS (.yyn, _GN.rnx, _MN.rnx, brdc) foi "
+                "encontrado nas pastas RBMC das estações selecionadas."
+            ],
+            "epochs": [],
+        }
+
+    records_by_sat, errors = merge_navigation_records([str(p) for p in nav_candidates])
+
+    if not records_by_sat:
+        return {
+            "epochs_requested": len(normalized_time_grid),
+            "epochs_with_geometry": 0,
+            "status": "nav_geometry_failed",
+            "source": "broadcast_nav",
+            "products": precise_products,
+            "navigation_context_count": len(navigation_context or []),
+            "nav_candidates": [str(p) for p in nav_candidates],
+            "errors": errors or ["Nenhuma efeméride GPS válida nos arquivos NAV."],
             "epochs": [],
         }
 
     epoch_satellite_map = _build_epoch_satellite_map_for_nav(normalized_time_grid)
-    errors: list[str] = []
 
-    for nav_path in nav_candidates:
-        try:
-            print(f"[ADV-GEO] tentando fallback NAV={nav_path}", flush=True)
+    try:
+        nav_cache = build_satellite_position_cache_from_records(
+            records_by_sat, epoch_satellite_map
+        )
+    except Exception as exc:
+        errors.append(f"cálculo orbital NAV :: {type(exc).__name__}: {exc}")
+        nav_cache = {}
 
-            nav_cache = build_satellite_position_cache_from_nav(
-                nav_file_path=str(nav_path),
-                epoch_satellite_map=epoch_satellite_map,
-            )
+    epochs_output = []
+    epochs_with_geometry = 0
+    satellite_catalog: set[str] = set()
 
-            if not isinstance(nav_cache, dict) or not nav_cache:
-                errors.append(f"NAV vazio: {nav_path}")
+    for epoch_dt in normalized_time_grid:
+        epoch_iso = _epoch_to_iso(epoch_dt)
+        sat_positions = nav_cache.get(epoch_iso, {}) or {}
+
+        normalized_sat_positions = {}
+        for sat, payload in sat_positions.items():
+            if not isinstance(payload, dict):
                 continue
 
-            epochs_output = []
-            epochs_with_geometry = 0
-            satellite_catalog: set[str] = set()
+            x = _safe_float(payload.get("x"))
+            y = _safe_float(payload.get("y"))
+            z = _safe_float(payload.get("z"))
 
-            for idx_epoch, epoch_dt in enumerate(normalized_time_grid):
-                epoch_iso = _epoch_to_iso(epoch_dt)
-                sat_positions = nav_cache.get(epoch_iso, {}) or {}
+            if x is None or y is None or z is None:
+                continue
 
-                normalized_sat_positions = {}
-                for sat, payload in sat_positions.items():
-                    if not isinstance(payload, dict):
-                        continue
+            entry = {
+                "x": x,
+                "y": y,
+                "z": z,
+                "clock_us": _safe_float(payload.get("clock_us")),
+                "interpolated": False,
+            }
+            for vkey in ("vx", "vy", "vz"):
+                if payload.get(vkey) is not None:
+                    entry[vkey] = _safe_float(payload.get(vkey))
+            normalized_sat_positions[sat] = entry
+            satellite_catalog.add(sat)
 
-                    x = _safe_float(payload.get("x"))
-                    y = _safe_float(payload.get("y"))
-                    z = _safe_float(payload.get("z"))
+        if normalized_sat_positions:
+            epochs_with_geometry += 1
 
-                    if x is None or y is None or z is None:
-                        continue
+        epochs_output.append({"epoch": epoch_iso, "satellites": normalized_sat_positions})
 
-                    normalized_sat_positions[sat] = {
-                        "x": x,
-                        "y": y,
-                        "z": z,
-                        "clock_us": _safe_float(payload.get("clock_us")),
-                        "interpolated": False,
-                    }
-                    satellite_catalog.add(sat)
+    print(
+        f"[ADV-GEO] NAV result epochs_with_geometry={epochs_with_geometry} "
+        f"satellite_count={len(satellite_catalog)} files={len(nav_candidates)}",
+        flush=True,
+    )
 
-                if normalized_sat_positions:
-                    epochs_with_geometry += 1
+    if epochs_with_geometry > 0:
+        return {
+            "epochs_requested": len(normalized_time_grid),
+            "epochs_with_geometry": epochs_with_geometry,
+            "status": "completed",
+            "source": "broadcast_nav_fallback",
+            "nav_path": str(nav_candidates[0]),
+            "nav_paths_used": [str(p) for p in nav_candidates],
+            "nav_parse_errors": errors,
+            "products": precise_products,
+            "navigation_context_count": len(navigation_context or []),
+            "satellite_count": len(satellite_catalog),
+            "epochs": epochs_output,
+        }
 
-                if idx_epoch < 3:
-                    print(
-                        f"[ADV-GEO-NAV] epoch_sample target={epoch_iso} "
-                        f"sat_count={len(normalized_sat_positions)} "
-                        f"sats={list(sorted(normalized_sat_positions.keys()))[:12]}",
-                        flush=True,
-                    )
-
-                epochs_output.append(
-                    {
-                        "epoch": epoch_iso,
-                        "satellites": normalized_sat_positions,
-                    }
-                )
-
-            print(
-                f"[ADV-GEO] NAV result epochs_with_geometry={epochs_with_geometry} "
-                f"satellite_count={len(satellite_catalog)} path={nav_path}",
-                flush=True,
-            )
-
-            if epochs_with_geometry > 0:
-                return {
-                    "epochs_requested": len(normalized_time_grid),
-                    "epochs_with_geometry": epochs_with_geometry,
-                    "status": "completed",
-                    "source": "broadcast_nav_fallback",
-                    "nav_path": str(nav_path),
-                    "products": precise_products,
-                    "navigation_context_count": len(navigation_context or []),
-                    "satellite_count": len(satellite_catalog),
-                    "epochs": epochs_output,
-                }
-
-            errors.append(f"NAV sem geometria útil: {nav_path}")
-
-        except Exception as exc:
-            errors.append(f"{nav_path} :: {type(exc).__name__}: {exc}")
-
+    errors.append(
+        "As efemérides NAV não cobrem a janela solicitada "
+        "(verifique se a data dos arquivos NAV corresponde à sessão)."
+    )
     return {
         "epochs_requested": len(normalized_time_grid),
         "epochs_with_geometry": 0,
@@ -688,12 +732,16 @@ def build_precise_geometry_cache(
         navigation_context=navigation_context,
     )
 
-    if sp3_result.get("epochs_with_geometry", 0) > 0:
+    requested = len(normalized_time_grid)
+    sp3_epochs_ok = int(sp3_result.get("epochs_with_geometry", 0) or 0)
+
+    if sp3_epochs_ok > 0 and sp3_epochs_ok >= 0.95 * requested:
         print("[ADV-GEO] usando geometria via SP3", flush=True)
         return sp3_result
 
     print(
-        f"[ADV-GEO] SP3 indisponível/status={sp3_result.get('status')} -> tentando fallback NAV",
+        f"[ADV-GEO] SP3 indisponível/incompleto status={sp3_result.get('status')} "
+        f"epochs={sp3_epochs_ok}/{requested} -> tentando fallback NAV",
         flush=True,
     )
 
@@ -702,8 +750,14 @@ def build_precise_geometry_cache(
         precise_products=precise_products,
         navigation_context=navigation_context,
     )
+    nav_epochs_ok = int(nav_result.get("epochs_with_geometry", 0) or 0)
 
-    if nav_result.get("epochs_with_geometry", 0) > 0:
+    if sp3_epochs_ok > 0 and sp3_epochs_ok >= nav_epochs_ok:
+        print("[ADV-GEO] SP3 parcial mantido (NAV não cobre mais épocas)", flush=True)
+        sp3_result["nav_attempt_status"] = nav_result.get("status")
+        return sp3_result
+
+    if nav_epochs_ok > 0:
         nav_result["fallback_from_sp3_status"] = sp3_result.get("status")
         nav_result["sp3_attempt"] = {
             "status": sp3_result.get("status"),
@@ -712,22 +766,85 @@ def build_precise_geometry_cache(
         print("[ADV-GEO] fallback NAV bem-sucedido", flush=True)
         return nav_result
 
+    download_errors = list((precise_products or {}).get("download_errors") or [])
+    nav_errors = list(nav_result.get("errors") or [])
+    message = build_geometry_unavailable_message(
+        sp3_status=sp3_result.get("status"),
+        download_errors=download_errors,
+        nav_status=nav_result.get("status"),
+        nav_errors=nav_errors,
+        nav_candidates=nav_result.get("nav_candidates", []),
+    )
+
     return {
-        "epochs_requested": len(normalized_time_grid),
+        "epochs_requested": requested,
         "epochs_with_geometry": 0,
         "status": "geometry_unavailable",
         "source": "sp3_then_nav",
+        "message": message,
         "products": precise_products,
         "navigation_context_count": len(navigation_context or []),
         "sp3_attempt": {
             "status": sp3_result.get("status"),
             "sp3_path": sp3_result.get("sp3_path"),
+            "download_errors": download_errors,
         },
         "nav_attempt": {
             "status": nav_result.get("status"),
             "nav_path": nav_result.get("nav_path"),
-            "errors": nav_result.get("errors", []),
+            "errors": nav_errors,
             "nav_candidates": nav_result.get("nav_candidates", []),
         },
         "epochs": [],
     }
+
+
+def _summarize_download_errors(download_errors: list[str]) -> str:
+    html = sum(1 for e in download_errors if "HTML" in e or "login" in e.lower())
+    timeouts = sum(
+        1 for e in download_errors if "timed out" in e.lower() or "timeout" in e.lower()
+    )
+    http404 = sum(1 for e in download_errors if "HTTP 404" in e)
+    parts = []
+    if html:
+        parts.append(f"{html} resposta(s) HTML/login (Earthdata recusou a autenticação)")
+    if timeouts:
+        parts.append(f"{timeouts} timeout(s)")
+    if http404:
+        parts.append(f"{http404} produto(s) ainda não publicado(s) (HTTP 404)")
+    others = len(download_errors) - html - timeouts - http404
+    if others > 0:
+        parts.append(f"{others} outra(s) falha(s)")
+    return ", ".join(parts) if parts else "nenhuma tentativa registrada"
+
+
+def build_geometry_unavailable_message(
+    sp3_status: str | None,
+    download_errors: list[str],
+    nav_status: str | None,
+    nav_errors: list[str],
+    nav_candidates: list[str],
+) -> str:
+    lines = [
+        "Geometria orbital indisponível: não foi possível obter posições de satélites "
+        "nem por SP3 (efemérides precisas) nem por NAV (efemérides broadcast)."
+    ]
+    lines.append(
+        f"SP3: status={sp3_status}; downloads: {_summarize_download_errors(download_errors)}."
+    )
+    if nav_status == "nav_not_found":
+        lines.append(
+            "NAV: nenhum arquivo .yyN/_GN.rnx/_MN.rnx/BRDC encontrado nas pastas RBMC "
+            "das estações nem baixado automaticamente."
+        )
+    else:
+        lines.append(
+            f"NAV: status={nav_status}; arquivos testados={len(nav_candidates)}; "
+            f"erros={'; '.join(nav_errors[:3]) if nav_errors else 'nenhum'}."
+        )
+    lines.append(
+        "Como resolver: (1) verifique usuário/senha Earthdata em Credenciais avançadas; "
+        "(2) envie o SP3 do dia manualmente (upload de efemérides); ou "
+        "(3) confirme que o ZIP RBMC das estações contém o arquivo de navegação .yyN."
+    )
+    return " ".join(lines)
