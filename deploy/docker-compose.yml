@@ -20,8 +20,10 @@ services:
     # No máximo 75% de 1 vCPU e prioridade de CPU menor que o resto do servidor
     cpus: ${ORBITBASE_CPUS:-0.75}
     cpu_shares: 512
-    mem_limit: ${ORBITBASE_MEM:-1800m}
-    memswap_limit: ${ORBITBASE_MEM:-1800m}
+    # Modo avançado com passo de 1 s em várias horas usa bastante RAM; o excedente
+    # pode ir para a swap do host (memswap = RAM + swap permitida ao container).
+    mem_limit: ${ORBITBASE_MEM:-2600m}
+    memswap_limit: ${ORBITBASE_MEMSWAP:-3600m}
     pids_limit: 256
     logging:
       driver: json-file

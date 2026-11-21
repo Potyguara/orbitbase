@@ -19,19 +19,13 @@ def _json_default(value):
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
-def write_advanced_debug_seed(output_path: str, advanced_seed: dict) -> str:
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            advanced_seed,
-            indent=2,
-            ensure_ascii=False,
-            default=_json_default,
-        ),
-        encoding="utf-8",
-    )
-    return str(path)
+def write_advanced_debug_seed(output_path: str, advanced_seed: dict) -> str | None:
+    """Grava o seed completo só quando ORBITBASE_ADV_DUMP_SEEDS=1 (debug)."""
+    from .advanced_json_io import debug_seed_dumps_enabled, dump_json_file
+
+    if not debug_seed_dumps_enabled():
+        return None
+    return dump_json_file(output_path, advanced_seed, indent=None)
 
 
 def _to_datetime(value: Any) -> datetime | None:

@@ -71,6 +71,22 @@ app.include_router(vrs_advanced.router)
 app.include_router(user_advanced_credentials.router)
 
 
+@app.on_event("startup")
+def _recover_interrupted_processing():
+    from pathlib import Path
+
+    from app.db import SessionLocal
+    from app.services.startup_recovery import recover_interrupted_processing
+
+    db = SessionLocal()
+    try:
+        recover_interrupted_processing(Path(__file__).resolve().parents[1] / "storage", db)
+    except Exception as exc:  # nunca impedir o servidor de subir
+        print(f"[STARTUP] falha ao recuperar processamentos: {exc}", flush=True)
+    finally:
+        db.close()
+
+
 @app.get("/")
 def root():
 

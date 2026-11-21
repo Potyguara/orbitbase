@@ -22,7 +22,7 @@ Internet ──443──> servidor web do host (nginx ou apache, o mesmo do biom
 | Recurso | Limite do OrbitBase | Observação |
 |---|---|---|
 | CPU | 0,75 vCPU no máximo, prioridade menor (`cpu_shares: 512`) | Em processamento pesado o biomereurb continua com prioridade de CPU |
-| RAM | backend 1,8 GB + web 96 MB | Em repouso usa ~80 MB. Se um job passar do limite, só o container do OrbitBase é reiniciado |
+| RAM | backend 2,6 GB (+1 GB de swap) + web 96 MB | Em repouso usa ~80 MB. Se um job passar do limite, só o processo do OrbitBase é encerrado e o job é marcado como falho |
 | Disco | imagem ~250 MB + `deploy/data/` | RINEX, efemérides e resultados crescem com o uso; limpe `deploy/data/storage/processing` periodicamente |
 | Rede | — | Downloads de RBMC/IBGE e NASA CDDIS durante os jobs |
 
