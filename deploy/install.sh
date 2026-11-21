@@ -37,7 +37,9 @@ detect_web_server() {
     *nginx*)               echo nginx ;;
     *apache2*|*httpd*)     echo apache ;;
     *litespeed*|*lshttpd*|*openlitespeed*) echo litespeed ;;
-    *docker-proxy*|*traefik*|*caddy*) echo docker ;;
+    *docker-proxy*)
+      if docker ps --filter publish=443 --format '{{.Image}}' 2>/dev/null | grep -qi caddy; then echo caddy-docker; else echo docker; fi ;;
+    *traefik*|*caddy*)     echo other:$owners ;;
     "")                    echo none ;;
     *)                     echo "other:$owners" ;;
   esac
@@ -72,7 +74,7 @@ if [ "$MODE" = "check" ]; then report; exit 0; fi
 report
 WEB="$(detect_web_server)"
 case "$WEB" in
-  nginx|apache|none) ;;
+  nginx|apache|none|caddy-docker) ;;
   *) die "Servidor web '$WEB' nas portas 80/443 não é configurado automaticamente. O OrbitBase pode subir em 127.0.0.1:$PORT; configure o proxy manualmente (veja deploy/README.md)." ;;
 esac
 ss -ltnpH "( sport = :$PORT )" | grep -q . && ! ss -ltnpH "( sport = :$PORT )" | grep -q docker \
@@ -81,6 +83,19 @@ ss -ltnpH "( sport = :$PORT )" | grep -q . && ! ss -ltnpH "( sport = :$PORT )" |
 # ---------------------------------------------------------------- backup
 log "Backup da configuração atual em $BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
+if [ "$WEB" = "caddy-docker" ]; then
+  CADDY_CONTAINER="$(docker ps --filter publish=443 --format '{{.Names}} {{.Image}}' | awk 'tolower($2) ~ /caddy/ {print $1; exit}')"
+  CADDYFILE="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/caddy/Caddyfile"}}{{.Source}}{{end}}{{end}}' "$CADDY_CONTAINER")"
+  if [ -z "$CADDYFILE" ]; then
+    CADDYDIR="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/caddy"}}{{.Source}}{{end}}{{end}}' "$CADDY_CONTAINER")"
+    [ -n "$CADDYDIR" ] && CADDYFILE="$CADDYDIR/Caddyfile"
+  fi
+  [ -n "$CADDYFILE" ] && [ -f "$CADDYFILE" ] || die "Não achei o Caddyfile montado no container $CADDY_CONTAINER."
+  CADDY_NETWORK="${CADDY_NETWORK:-$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$CADDY_CONTAINER" | awk '{print $1}')}"
+  echo "Caddy: container=$CADDY_CONTAINER caddyfile=$CADDYFILE rede=$CADDY_NETWORK"
+  cp -p "$CADDYFILE" "$BACKUP_DIR/Caddyfile"
+  printf 'CADDY_CONTAINER=%s\nCADDYFILE=%s\nCADDY_NETWORK=%s\n' "$CADDY_CONTAINER" "$CADDYFILE" "$CADDY_NETWORK" > "$BACKUP_DIR/caddy.env"
+fi
 for d in /etc/nginx /etc/apache2 /etc/letsencrypt; do
   [ -d "$d" ] && tar -czf "$BACKUP_DIR/$(basename "$d").tgz" -C / "${d#/}" 2>/dev/null || true
 done
@@ -119,7 +134,12 @@ sed -i "s|^CORS_ORIGINS=.*|CORS_ORIGINS=https://$DOMAIN|" .env
 grep -q '^ORBITBASE_PORT=' .env && sed -i "s|^ORBITBASE_PORT=.*|ORBITBASE_PORT=$PORT|" .env || echo "ORBITBASE_PORT=$PORT" >> .env
 
 log "Subindo containers"
-docker compose --env-file .env up -d --build --remove-orphans
+COMPOSE=(docker compose --env-file .env -f docker-compose.yml)
+if [ "$WEB" = "caddy-docker" ]; then
+  grep -q '^CADDY_NETWORK=' .env && sed -i "s|^CADDY_NETWORK=.*|CADDY_NETWORK=$CADDY_NETWORK|" .env || echo "CADDY_NETWORK=$CADDY_NETWORK" >> .env
+  COMPOSE+=(-f docker-compose.caddy.yml)
+fi
+"${COMPOSE[@]}" up -d --build --remove-orphans
 for i in $(seq 1 30); do
   curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && break
   sleep 2
@@ -183,14 +203,34 @@ APACHE
   systemctl reload apache2
 }
 
+setup_caddy_docker() {
+  local begin="# >>> orbitbase (gerenciado por /opt/orbitbase/deploy/install.sh)" end="# <<< orbitbase"
+  if grep -qF "$begin" "$CADDYFILE"; then
+    echo "Bloco do OrbitBase já existe no Caddyfile; mantendo."
+  else
+    # Acrescenta no mesmo arquivo (mesmo inode), para o bind mount do container enxergar a mudança.
+    printf '\n%s\n%s {\n\tencode gzip\n\trequest_body {\n\t\tmax_size 1GB\n\t}\n\treverse_proxy orbitbase-web:80 {\n\t\ttransport http {\n\t\t\tread_timeout 1h\n\t\t\twrite_timeout 1h\n\t\t}\n\t}\n}\n%s\n' \
+      "$begin" "$DOMAIN" "$end" >> "$CADDYFILE"
+  fi
+  if ! docker exec "$CADDY_CONTAINER" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; then
+    cat "$BACKUP_DIR/Caddyfile" > "$CADDYFILE"
+    die "Caddyfile inválido; arquivo original restaurado, Caddy não foi recarregado."
+  fi
+  docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+  echo "Caddy recarregado; o HTTPS de $DOMAIN é emitido automaticamente pelo Caddy."
+}
+
 log "Proxy reverso no servidor web do host ($WEB)"
 case "$WEB" in
+  caddy-docker) setup_caddy_docker; PLUGIN=caddy ;;
   nginx|none) setup_nginx; PLUGIN=nginx ;;
   apache)     setup_apache; PLUGIN=apache ;;
 esac
 
 # ---------------------------------------------------------------- HTTPS
-if [ "$SKIP_TLS" = "1" ]; then
+if [ "${PLUGIN:-}" = "caddy" ]; then
+  :
+elif [ "$SKIP_TLS" = "1" ]; then
   warn "SKIP_TLS=1: HTTPS não configurado."
 else
   SERVER_IP="$(public_ip)"; RESOLVED="$(dns_ip || true)"

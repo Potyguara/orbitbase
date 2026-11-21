@@ -8,8 +8,22 @@ APP_DIR="${APP_DIR:-/opt/orbitbase}"
 PURGE=0; [ "${1:-}" = "--purge" ] && PURGE=1
 [ "$(id -u)" -eq 0 ] || { echo "Rode como root." >&2; exit 1; }
 
+echo "==> Removendo bloco do OrbitBase do Caddy (se houver)"
+CADDY_ENV="$(ls -1d /root/orbitbase-backups/*/caddy.env 2>/dev/null | tail -1 || true)"
+if [ -n "$CADDY_ENV" ]; then
+  # shellcheck disable=SC1090
+  . "$CADDY_ENV"
+  if [ -f "$CADDYFILE" ] && grep -q '^# >>> orbitbase' "$CADDYFILE"; then
+    cp -p "$CADDYFILE" "$CADDYFILE.antes-rollback-orbitbase"
+    awk '/^# >>> orbitbase/{skip=1} !skip{print} /^# <<< orbitbase/{skip=0}' "$CADDYFILE.antes-rollback-orbitbase" > /tmp/Caddyfile.orbitbase-rollback
+    cat /tmp/Caddyfile.orbitbase-rollback > "$CADDYFILE"   # mesmo inode (bind mount)
+    rm -f /tmp/Caddyfile.orbitbase-rollback
+    docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+  fi
+fi
+
 echo "==> Parando containers"
-[ -f "$APP_DIR/deploy/docker-compose.yml" ] && (cd "$APP_DIR/deploy" && docker compose down --remove-orphans) || true
+[ -f "$APP_DIR/deploy/docker-compose.yml" ] && (cd "$APP_DIR/deploy" && docker compose -p orbitbase down --remove-orphans) || true
 
 echo "==> Removendo vhost do OrbitBase"
 if [ -d /etc/nginx ]; then

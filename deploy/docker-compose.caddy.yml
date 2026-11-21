@@ -1,0 +1,13 @@
+# Usado quando 80/443 pertencem a um Caddy em container (caso da VPS do biomereurb).
+# Conecta o container web do OrbitBase à rede do Caddy, com o alias "orbitbase-web".
+services:
+  web:
+    networks:
+      default: {}
+      edge:
+        aliases: [orbitbase-web]
+
+networks:
+  edge:
+    external: true
+    name: ${CADDY_NETWORK:?defina CADDY_NETWORK}

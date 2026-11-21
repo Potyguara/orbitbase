@@ -60,7 +60,9 @@ O script é idempotente (pode rodar de novo para atualizar) e:
 5. Cria o vhost do subdomínio no nginx ou apache do host. Se o teste de configuração (`nginx -t` / `apachectl configtest`) falhar, remove o arquivo novo e para, sem recarregar o servidor.
 6. Emite o certificado HTTPS se o DNS já aponta para a VPS (senão, rode de novo depois da propagação).
 
-Servidores suportados automaticamente: nginx, apache ou nenhum (instala nginx). Para OpenLiteSpeed/CyberPanel, Traefik/Coolify/Easypanel ou outro proxy em container, o script para antes de mexer em qualquer coisa; nesse caso aponte o proxy existente para `http://127.0.0.1:8088`.
+Servidores suportados automaticamente: nginx, apache, nenhum (instala nginx) ou **Caddy em container** (caso atual da VPS do biomereurb).
+
+No modo Caddy, o script conecta o container `web` do OrbitBase à rede Docker do Caddy (`docker-compose.caddy.yml`, alias `orbitbase-web`), acrescenta ao Caddyfile existente um bloco entre `# >>> orbitbase` e `# <<< orbitbase`, roda `caddy validate` (se falhar, restaura o arquivo e não recarrega) e faz `caddy reload`, que não derruba o site. O HTTPS do subdomínio é emitido pelo próprio Caddy; certbot não é usado. O rollback remove só esse bloco e recarrega o Caddy. Para OpenLiteSpeed/CyberPanel, Traefik/Coolify/Easypanel ou outro proxy em container, o script para antes de mexer em qualquer coisa; nesse caso aponte o proxy existente para `http://127.0.0.1:8088`.
 
 ## Credenciais Earthdata
 
