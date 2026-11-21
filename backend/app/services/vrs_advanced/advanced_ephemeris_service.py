@@ -3,8 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from datetime import timedelta
+from urllib.parse import urlparse
 import gzip
 import json
+import os
 import shutil
 import subprocess
 
@@ -12,7 +15,78 @@ import requests
 from bs4 import BeautifulSoup
 
 DEFAULT_TIMEOUT_SECONDS = 20
+CONNECT_TIMEOUT_SECONDS = 10
 GPS_EPOCH = datetime(1980, 1, 6, tzinfo=timezone.utc)
+
+# Semana GPS a partir da qual o IGS passou a publicar apenas nomes longos
+# (IGS0OPSFIN_YYYYDDD0000_01D_15M_ORB.SP3.gz).
+IGS_LONG_NAME_FIRST_WEEK = 2238
+
+EARTHDATA_AUTH_HOST = "urs.earthdata.nasa.gov"
+
+# Espelhos dos produtos IGS. {week} é a semana GPS.
+# CDDIS exige Earthdata; BKG e IGN são anônimos.
+# Pode ser sobrescrito por ORBITBASE_SP3_MIRRORS="nome=url_base,nome2=url_base2".
+DEFAULT_SP3_MIRRORS: list[tuple[str, str, bool]] = [
+    ("cddis", "https://cddis.nasa.gov/archive/gnss/products/{week}/", True),
+    ("bkg", "https://igs.bkg.bund.de/root_ftp/IGS/products/{week}/", False),
+    ("ign", "https://igs.ign.fr/pub/igs/products/{week}/", False),
+]
+
+# Navegação broadcast diária combinada (RINEX 3, mista) — último recurso
+# quando não há SP3 nem NAV dentro do ZIP RBMC.
+DEFAULT_BRDC_MIRRORS: list[tuple[str, str, bool]] = [
+    ("bkg", "https://igs.bkg.bund.de/root_ftp/IGS/BRDC/{yyyy}/{doy}/", False),
+    ("cddis", "https://cddis.nasa.gov/archive/gnss/data/daily/{yyyy}/brdc/", True),
+]
+
+
+def _mirrors_from_env(env_name: str, default: list[tuple[str, str, bool]]):
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        return list(default)
+    mirrors = []
+    for chunk in raw.split(","):
+        if "=" not in chunk:
+            continue
+        name, url = chunk.split("=", 1)
+        name = name.strip()
+        url = url.strip()
+        if not name or not url:
+            continue
+        mirrors.append((name, url, "cddis.nasa.gov" in url))
+    return mirrors or list(default)
+
+
+class EarthdataSession(requests.Session):
+    """
+    O CDDIS redireciona para urs.earthdata.nasa.gov para autenticar.
+    O ``requests`` padrão REMOVE o cabeçalho Authorization ao trocar de host,
+    então o login nunca chegava ao Earthdata e o servidor devolvia a página
+    HTML de login (causa do erro do job 141). Esta sessão mantém a
+    autenticação apenas entre CDDIS e Earthdata (receita oficial da NASA).
+    """
+
+    _TRUSTED_HOSTS = {EARTHDATA_AUTH_HOST, "cddis.nasa.gov"}
+
+    def rebuild_auth(self, prepared_request, response):
+        headers = prepared_request.headers
+        url = prepared_request.url
+        if "Authorization" in headers:
+            original = urlparse(response.request.url).hostname
+            redirect = urlparse(url).hostname
+            if (
+                original != redirect
+                and not (
+                    original in self._TRUSTED_HOSTS and redirect in self._TRUSTED_HOSTS
+                )
+            ):
+                del headers["Authorization"]
+        return
+
+
+class HtmlInsteadOfFileError(RuntimeError):
+    pass
 
 
 @dataclass
@@ -94,6 +168,8 @@ def _looks_like_html_response(path: Path) -> bool:
             return False
 
         header = path.read_bytes()[:4096]
+        if header[:2] in (b"\x1f\x8b", b"\x1f\x9d"):
+            return False
         text = header.decode("utf-8", errors="ignore").lstrip().lower()
 
         return (
@@ -167,11 +243,9 @@ def _looks_like_valid_sp3(path: Path) -> bool:
 def _final_sp3_output_name(downloaded_name: str) -> str:
     upper = downloaded_name.upper()
 
-    if upper.endswith(".SP3.GZ"):
+    if upper.endswith(".GZ"):
         return downloaded_name[:-3]
-    if downloaded_name.endswith(".GZ"):
-        return downloaded_name[:-3]
-    if upper.endswith(".SP3.Z") or downloaded_name.endswith(".Z"):
+    if upper.endswith(".Z"):
         return downloaded_name[:-2]
     return downloaded_name
 
@@ -336,14 +410,14 @@ def _build_requests_session(
     username: str | None = None,
     password: str | None = None,
 ) -> requests.Session:
-    session = requests.Session()
+    session = EarthdataSession()
 
     if username and password:
         session.auth = (username, password)
 
     session.headers.update(
         {
-            "User-Agent": "OrbitBase/0.1 advanced-ephemeris",
+            "User-Agent": "OrbitBase/0.2 advanced-ephemeris",
             "Accept": "*/*",
         }
     )
@@ -361,11 +435,19 @@ def _download_file(
 
     response = session.get(
         url,
-        timeout=timeout_seconds,
+        timeout=(min(CONNECT_TIMEOUT_SECONDS, timeout_seconds), timeout_seconds),
         allow_redirects=True,
         stream=True,
     )
     response.raise_for_status()
+
+    content_type = (response.headers.get("Content-Type") or "").lower()
+    final_host = urlparse(response.url).hostname or ""
+    if "text/html" in content_type or final_host == EARTHDATA_AUTH_HOST:
+        response.close()
+        raise HtmlInsteadOfFileError(
+            f"Servidor devolveu HTML (provável página de login Earthdata) em vez do arquivo: {url}"
+        )
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "wb") as fh:
@@ -447,16 +529,43 @@ def _discover_sp3_candidates_from_cddis_listing(
     return candidates
 
 
+def sp3_product_filenames(session_date: str) -> list[str]:
+    """
+    Nomes de SP3 IGS, do mais preciso ao menos preciso:
+    final (latência ~2 semanas), rápido (~1 dia) e ultra-rápido (horas).
+    """
+    gps_week, gps_dow = _gps_week_and_dow(session_date)
+    yyyy = _year_4d(session_date)
+    doy3 = f"{_day_of_year(session_date):03d}"
+
+    names = [
+        f"IGS0OPSFIN_{yyyy}{doy3}0000_01D_15M_ORB.SP3.gz",
+        f"IGS0OPSRAP_{yyyy}{doy3}0000_01D_15M_ORB.SP3.gz",
+    ]
+    for hh in ("18", "12", "06", "00"):
+        names.append(f"IGS0OPSULT_{yyyy}{doy3}{hh}00_02D_15M_ORB.SP3.gz")
+
+    if gps_week < IGS_LONG_NAME_FIRST_WEEK:
+        names.extend(
+            [
+                f"igs{gps_week}{gps_dow}.sp3.Z",
+                f"igr{gps_week}{gps_dow}.sp3.Z",
+                f"igu{gps_week}{gps_dow}_18.sp3.Z",
+                f"igu{gps_week}{gps_dow}_12.sp3.Z",
+            ]
+        )
+
+    return names
+
+
 def _build_sp3_candidates(
     session_date: str,
     earthdata_username: str | None = None,
     earthdata_password: str | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> list[DownloadCandidate]:
-    gps_week, gps_dow = _gps_week_and_dow(session_date)
-    gps_week_str = str(gps_week)
-    yyyy = _year_4d(session_date)
-    doy3 = f"{_day_of_year(session_date):03d}"
+    gps_week, _ = _gps_week_and_dow(session_date)
+    has_credentials = bool(earthdata_username and earthdata_password)
 
     candidates: list[DownloadCandidate] = []
     seen_urls: set[str] = set()
@@ -467,73 +576,63 @@ def _build_sp3_candidates(
         seen_urls.add(candidate.url)
         candidates.append(candidate)
 
-    if earthdata_username and earthdata_password:
-        try:
-            discovered = _discover_sp3_candidates_from_cddis_listing(
-                session_date=session_date,
-                gps_week=gps_week,
-                earthdata_username=earthdata_username,
-                earthdata_password=earthdata_password,
-                timeout_seconds=timeout_seconds,
-            )
-            discovered.sort(key=lambda c: _sp3_candidate_priority(c.filename))
-            for item in discovered:
-                add_candidate(item)
-        except Exception as exc:
-            print(f"[ADV-EPH] falha ao descobrir listagem CDDIS: {exc}", flush=True)
+    mirrors = _mirrors_from_env("ORBITBASE_SP3_MIRRORS", DEFAULT_SP3_MIRRORS)
 
-    short_names = [
-        f"igs{gps_week}{gps_dow}.sp3.Z",
-        f"igr{gps_week}{gps_dow}.sp3.Z",
-        f"igu{gps_week}{gps_dow}.sp3.Z",
-        f"igs{gps_week}{gps_dow}.sp3.gz",
-        f"igr{gps_week}{gps_dow}.sp3.gz",
-        f"igu{gps_week}{gps_dow}.sp3.gz",
-    ]
-
-    for name in short_names:
-        add_candidate(
-            DownloadCandidate(
-                url=f"https://cddis.nasa.gov/archive/gnss/products/{gps_week_str}/{name}",
-                filename=name,
-                compressed=True,
-                source="cddis_classic",
+    # Para cada nível de qualidade, tenta todos os espelhos antes de cair
+    # para um produto menos preciso.
+    for name in sp3_product_filenames(session_date):
+        for mirror_name, base_url, needs_auth in mirrors:
+            if needs_auth and not has_credentials:
+                continue
+            add_candidate(
+                DownloadCandidate(
+                    url=base_url.format(week=gps_week) + name,
+                    filename=name,
+                    compressed=name.lower().endswith((".gz", ".z")),
+                    source=mirror_name,
+                )
             )
-        )
-        add_candidate(
-            DownloadCandidate(
-                url=f"https://igs.ign.fr/pub/igs/products/{gps_week_str}/{name}",
-                filename=name,
-                compressed=True,
-                source="ign_classic",
-            )
-        )
-
-    long_names = [
-        f"IGS0OPSFIN_{yyyy}{doy3}0000_01D_15M_ORB.SP3.gz",
-        f"IGS0OPSRAP_{yyyy}{doy3}0000_01D_15M_ORB.SP3.gz",
-        f"IGS0OPSULT_{yyyy}{doy3}0000_01D_15M_ORB.SP3.gz",
-    ]
-
-    for name in long_names:
-        add_candidate(
-            DownloadCandidate(
-                url=f"https://cddis.nasa.gov/archive/gnss/products/{gps_week_str}/{name}",
-                filename=name,
-                compressed=True,
-                source="cddis_long",
-            )
-        )
-        add_candidate(
-            DownloadCandidate(
-                url=f"https://igs.ign.fr/pub/igs/products/{gps_week_str}/{name}",
-                filename=name,
-                compressed=True,
-                source="ign_long",
-            )
-        )
 
     return candidates
+
+
+def brdc_product_candidates(
+    session_date: str, has_credentials: bool
+) -> list[DownloadCandidate]:
+    dt = datetime.strptime(session_date, "%Y-%m-%d")
+    yyyy = dt.strftime("%Y")
+    yy = dt.strftime("%y")
+    doy = dt.strftime("%j")
+
+    names = [
+        f"BRDC00WRD_R_{yyyy}{doy}0000_01D_MN.rnx.gz",
+        f"brdc{doy}0.{yy}n.gz",
+    ]
+
+    out: list[DownloadCandidate] = []
+    for mirror_name, base_url, needs_auth in _mirrors_from_env(
+        "ORBITBASE_BRDC_MIRRORS", DEFAULT_BRDC_MIRRORS
+    ):
+        if needs_auth and not has_credentials:
+            continue
+        base = base_url.format(yyyy=yyyy, doy=doy, yy=yy)
+        for name in names:
+            out.append(
+                DownloadCandidate(
+                    url=base + name, filename=name, compressed=True, source=mirror_name
+                )
+            )
+    return out
+
+
+def _host_of(url: str) -> str:
+    return urlparse(url).hostname or url
+
+
+def _is_unreachable_error(exc: Exception) -> bool:
+    return isinstance(
+        exc, (requests.ConnectTimeout, requests.ConnectionError, requests.ReadTimeout)
+    )
 
 
 def _find_cached_sp3(day_root: Path) -> Path | None:
@@ -571,7 +670,17 @@ def _try_download_sp3(
 
     print(f"[ADV-EPH] total_candidates={len(candidates)}", flush=True)
 
+    dead_hosts: set[str] = set()
+    auth_failed = False
+
+    if not candidates:
+        errors.append("Nenhum espelho SP3 disponível para tentar.")
+
     for candidate in candidates:
+        host = _host_of(candidate.url)
+        if host in dead_hosts:
+            continue
+
         tmp_path = downloads_dir / candidate.filename
         final_name = _final_sp3_output_name(candidate.filename)
         final_path = day_root / final_name
@@ -615,6 +724,9 @@ def _try_download_sp3(
             if _looks_like_html_response(tmp_path):
                 print(f"[ADV-EPH] HTML detectado para {candidate.url}", flush=True)
                 errors.append(f"Resposta HTML em vez de arquivo SP3: {candidate.url}")
+                if "cddis.nasa.gov" in candidate.url:
+                    auth_failed = True
+                    dead_hosts.add(host)
                 _safe_unlink(tmp_path)
                 continue
 
@@ -643,16 +755,29 @@ def _try_download_sp3(
                     "sp3_cached": False,
                     "download_errors": errors,
                     "manual_upload_used": False,
+                    "earthdata_auth_failed": auth_failed,
+                    "unreachable_hosts": sorted(dead_hosts),
                 }
 
             errors.append(f"Arquivo baixado mas inválido como SP3: {candidate.url}")
             _safe_unlink(final_path)
 
+        except HtmlInsteadOfFileError as exc:
+            if "cddis.nasa.gov" in candidate.url:
+                auth_failed = True
+                # Login recusado: os demais arquivos do CDDIS falhariam igual.
+                dead_hosts.add(host)
+            errors.append(f"Resposta HTML/login em vez de SP3 :: {candidate.url} :: {exc}")
         except requests.HTTPError as exc:
             status_code = exc.response.status_code if exc.response is not None else "?"
+            if status_code in (401, 403) and "cddis.nasa.gov" in candidate.url:
+                auth_failed = True
+                dead_hosts.add(host)
             errors.append(f"HTTP {status_code} :: {candidate.url}")
         except requests.RequestException as exc:
-            errors.append(f"Request error :: {candidate.url} :: {exc}")
+            if _is_unreachable_error(exc):
+                dead_hosts.add(host)
+            errors.append(f"Request error (timeout/conexão) :: {candidate.url} :: {exc}")
         except Exception as exc:
             errors.append(f"Erro :: {candidate.url} :: {type(exc).__name__}: {exc}")
         finally:
@@ -666,6 +791,8 @@ def _try_download_sp3(
         "sp3_cached": False,
         "download_errors": errors,
         "manual_upload_used": False,
+        "earthdata_auth_failed": auth_failed,
+        "unreachable_hosts": sorted(dead_hosts),
     }
 
 
@@ -733,6 +860,8 @@ def ensure_precise_ephemeris_products(
         "sp3_cached": bool(download_result["sp3_cached"]),
         "checked_at": datetime.utcnow().isoformat() + "Z",
         "download_errors": download_result["download_errors"],
+        "earthdata_auth_failed": download_result.get("earthdata_auth_failed", False),
+        "unreachable_hosts": download_result.get("unreachable_hosts", []),
         "auth_mode": auth_mode,
         "earthdata_username_masked": masked_username,
         "manual_upload_used": False,
@@ -743,3 +872,92 @@ def ensure_precise_ephemeris_products(
 
     _write_json(manifest_path, payload)
     return payload
+
+
+def _looks_like_valid_nav(path: Path) -> bool:
+    try:
+        if not path.exists() or path.stat().st_size < 200:
+            return False
+        head = path.read_bytes()[:2048].decode("utf-8", errors="ignore").upper()
+        return "RINEX VERSION / TYPE" in head and "NAV" in head
+    except Exception:
+        return False
+
+
+def ensure_broadcast_navigation(
+    session_date: str,
+    storage_root: Path,
+    earthdata_username: str | None = None,
+    earthdata_password: str | None = None,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+) -> dict:
+    """
+    Baixa (ou reaproveita do cache) o BRDC diário combinado do IGS em
+    ``storage/precise_products/<data>/brdc``. Usado só quando nem SP3 nem os
+    NAV do ZIP RBMC estão disponíveis.
+    """
+    brdc_dir = storage_root / "precise_products" / session_date / "brdc"
+    brdc_dir.mkdir(parents=True, exist_ok=True)
+
+    for cached in sorted(brdc_dir.iterdir()):
+        if cached.is_file() and _looks_like_valid_nav(cached):
+            return {"nav_available": True, "nav_path": str(cached), "cached": True,
+                    "download_errors": [], "brdc_dir": str(brdc_dir)}
+
+    errors: list[str] = []
+    dead_hosts: set[str] = set()
+    has_credentials = bool(earthdata_username and earthdata_password)
+
+    for candidate in brdc_product_candidates(session_date, has_credentials):
+        host = _host_of(candidate.url)
+        if host in dead_hosts:
+            continue
+
+        tmp_path = brdc_dir / (candidate.filename + ".part")
+        final_path = brdc_dir / _final_sp3_output_name(candidate.filename)
+        try:
+            print(f"[ADV-BRDC] tentando {candidate.url}", flush=True)
+            needs_auth = "cddis.nasa.gov" in candidate.url
+            _download_file(
+                candidate.url,
+                tmp_path,
+                timeout_seconds=timeout_seconds,
+                username=earthdata_username if needs_auth else None,
+                password=earthdata_password if needs_auth else None,
+            )
+            if _looks_like_html_response(tmp_path):
+                raise HtmlInsteadOfFileError(f"HTML em vez de NAV: {candidate.url}")
+
+            raw = tmp_path.read_bytes()
+            if raw[:2] == b"\x1f\x8b":
+                final_path.write_bytes(gzip.decompress(raw))
+            elif raw[:2] == b"\x1f\x9d":
+                _decompress_Z_file(tmp_path, final_path)
+            else:
+                final_path.write_bytes(raw)
+
+            if _looks_like_valid_nav(final_path):
+                print(f"[ADV-BRDC] NAV válido: {final_path}", flush=True)
+                return {"nav_available": True, "nav_path": str(final_path),
+                        "cached": False, "source_url": candidate.url,
+                        "download_errors": errors, "brdc_dir": str(brdc_dir)}
+
+            errors.append(f"Arquivo baixado não é NAV RINEX válido :: {candidate.url}")
+            _safe_unlink(final_path)
+        except HtmlInsteadOfFileError as exc:
+            dead_hosts.add(host)
+            errors.append(str(exc))
+        except requests.HTTPError as exc:
+            code = exc.response.status_code if exc.response is not None else "?"
+            errors.append(f"HTTP {code} :: {candidate.url}")
+        except requests.RequestException as exc:
+            if _is_unreachable_error(exc):
+                dead_hosts.add(host)
+            errors.append(f"Request error (timeout/conexão) :: {candidate.url} :: {exc}")
+        except Exception as exc:
+            errors.append(f"Erro :: {candidate.url} :: {type(exc).__name__}: {exc}")
+        finally:
+            _safe_unlink(tmp_path)
+
+    return {"nav_available": False, "nav_path": None, "cached": False,
+            "download_errors": errors, "brdc_dir": str(brdc_dir)}

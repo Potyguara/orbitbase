@@ -532,21 +532,39 @@ def _resolve_rbmc_station_observation_path(
         return None
 
 
+def _resolve_rbmc_station_state(station_code: str, session_date: str) -> dict:
+    try:
+        return ensure_rbmc_station_files(station_code, session_date) or {}
+    except Exception as exc:
+        print(
+            f"[RBMC-RESOLVE] falha ao garantir arquivos de {station_code}/{session_date}: {exc}",
+            flush=True,
+        )
+        return {}
+
+
 def _resolve_candidate_base_paths(job) -> list[dict]:
     selected_station_codes = _load_selected_station_codes_from_job(job)
     candidates: list[dict] = []
 
     for code in selected_station_codes:
-        path = _resolve_rbmc_station_observation_path(code, job.session_date)
-        if path is None:
+        state = _resolve_rbmc_station_state(code, job.session_date)
+        best_obs = state.get("best_observation_file")
+        if not best_obs:
             continue
 
         candidates.append(
             {
                 "station_code": code,
                 "label": f"rbmc_{code}",
-                "path": path,
+                "path": Path(best_obs),
                 "source_type": "rbmc_map_selection",
+                # NAV broadcast do mesmo ZIP RBMC (.yyn / _GN.rnx / _MN.rnx).
+                "nav_path": state.get("best_navigation_file"),
+                "nav_paths": list(state.get("navigation_files") or []),
+                "rbmc_day_root": (
+                    str(state.get("day_root")) if state.get("day_root") else None
+                ),
             }
         )
 

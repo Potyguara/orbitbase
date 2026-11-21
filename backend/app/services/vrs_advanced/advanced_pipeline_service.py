@@ -14,7 +14,10 @@ from app.services.vrs_processing_service import (
 
 from .advanced_config import normalize_advanced_config
 from .advanced_debug_report_service import write_advanced_debug_report
-from .advanced_ephemeris_service import ensure_precise_ephemeris_products
+from .advanced_ephemeris_service import (
+    ensure_broadcast_navigation,
+    ensure_precise_ephemeris_products,
+)
 from .advanced_geometry_service import build_precise_geometry_cache
 from .advanced_nav_service import resolve_advanced_navigation_files
 from .advanced_observation_interpolation_service import (
@@ -695,6 +698,8 @@ def process_real_vrs_advanced(
                 "station_code": item.get("station_code"),
                 "label": item.get("label"),
                 "path": str(item.get("path")) if item.get("path") else None,
+                "nav_path": item.get("nav_path"),
+                "nav_paths": list(item.get("nav_paths") or []),
                 "source": "candidate_paths",
             }
         )
@@ -740,7 +745,11 @@ def process_real_vrs_advanced(
         flush=True,
     )
 
-    nav_context = resolve_advanced_navigation_files(nav_context_input)
+    nav_context = resolve_advanced_navigation_files(
+        nav_context_input,
+        session_date=job.session_date,
+    )
+    local_nav_count = sum(1 for item in nav_context if item.get("nav_path"))
 
     _write_json(
         metadata_root / "advanced_navigation_context.json",
@@ -754,22 +763,24 @@ def process_real_vrs_advanced(
         36,
         "nav_done",
         "Identificando arquivos de navegação",
-        f"{len(nav_context)} itens de contexto",
+        f"{local_nav_count}/{len(nav_context)} estações com NAV local",
     )
 
     use_precise_ephemeris = bool(cfg.get("use_precise_ephemeris", True))
 
     if use_precise_ephemeris and (not earthdata_username or not earthdata_password):
+        # Sem Earthdata ainda tentamos os espelhos anônimos (BKG/IGN) e,
+        # em último caso, a navegação broadcast. Não é mais um erro fatal.
+        print(
+            "[ADV-PIPE] Earthdata ausente: usando apenas espelhos SP3 anônimos + NAV.",
+            flush=True,
+        )
         write_advanced_progress(
             job_root,
             38,
-            "precise_products_failed",
+            "precise_products_no_credentials",
             "Credenciais Earthdata ausentes",
-            "As efemérides precisas foram solicitadas, mas o pipeline não recebeu usuário/senha Earthdata.",
-            status="failed",
-        )
-        raise ValueError(
-            "Credenciais Earthdata / CDDIS não informadas para o processamento avançado."
+            "Tentando espelhos SP3 anônimos (BKG/IGN) e navegação broadcast.",
         )
 
     print("[ADV-PIPE] chamando ensure_precise_ephemeris_products...", flush=True)
@@ -782,14 +793,23 @@ def process_real_vrs_advanced(
         f"data={job.session_date}",
     )
 
-    precise_products = ensure_precise_ephemeris_products(
-        session_date=job.session_date,
-        storage_root=storage_root,
-        earthdata_username=earthdata_username,
-        earthdata_password=earthdata_password,
-        timeout_seconds=60,
-        force_refresh=False,
-    )
+    if use_precise_ephemeris:
+        precise_products = ensure_precise_ephemeris_products(
+            session_date=job.session_date,
+            storage_root=storage_root,
+            earthdata_username=earthdata_username,
+            earthdata_password=earthdata_password,
+            timeout_seconds=30,
+            force_refresh=False,
+        )
+    else:
+        precise_products = {
+            "session_date": job.session_date,
+            "sp3_available": False,
+            "sp3_path": None,
+            "status": "disabled_by_config",
+            "download_errors": [],
+        }
 
     _write_json(
         metadata_root / "advanced_precise_products.json",
@@ -804,7 +824,7 @@ def process_real_vrs_advanced(
         "precise_products_done",
         "Efemérides precisas verificadas",
         json.dumps(precise_products, ensure_ascii=False, default=_json_default),
-        status="running" if precise_products.get("sp3_available") else "failed",
+        status="running",
     )
 
     if use_precise_ephemeris and not precise_products.get("sp3_available"):
@@ -820,6 +840,36 @@ def process_real_vrs_advanced(
             "O modo avançado continuará com geometria derivada da navegação broadcast.",
             status="running",
         )
+
+    if not precise_products.get("sp3_available") and local_nav_count == 0:
+        print(
+            "[ADV-PIPE] sem SP3 e sem NAV local: tentando BRDC diário do IGS.",
+            flush=True,
+        )
+        brdc_result = ensure_broadcast_navigation(
+            session_date=job.session_date,
+            storage_root=storage_root,
+            earthdata_username=earthdata_username,
+            earthdata_password=earthdata_password,
+            timeout_seconds=30,
+        )
+        _write_json(metadata_root / "advanced_brdc_download.json", brdc_result)
+        precise_products.setdefault("download_errors", [])
+        precise_products["brdc_download"] = {
+            "nav_available": brdc_result.get("nav_available"),
+            "nav_path": brdc_result.get("nav_path"),
+            "errors": brdc_result.get("download_errors", [])[:10],
+        }
+        if brdc_result.get("nav_path"):
+            nav_context.append(
+                {
+                    "station_code": "IGS_BRDC",
+                    "obs_path": None,
+                    "nav_path": brdc_result["nav_path"],
+                    "nav_paths": [brdc_result["nav_path"]],
+                    "status": "downloaded_brdc",
+                }
+            )
 
     time_grid = build_target_time_grid(
         start_utc=window["start_utc"],
@@ -880,12 +930,32 @@ def process_real_vrs_advanced(
         geometry_cache,
     )
 
+    if int(geometry_cache.get("epochs_with_geometry", 0) or 0) <= 0:
+        message = geometry_cache.get("message") or (
+            "Geometria orbital indisponível "
+            f"(status={geometry_cache.get('status')})."
+        )
+        write_advanced_progress(
+            job_root,
+            62,
+            "geometry_failed",
+            "Geometria orbital indisponível",
+            message,
+            status="failed",
+        )
+        raise ValueError(message)
+
     write_advanced_progress(
         job_root,
         62,
         "geometry_done",
         "Cache orbital montado",
-        json.dumps(geometry_cache, ensure_ascii=False, default=_json_default),
+        (
+            f"source={geometry_cache.get('source')} | "
+            f"epochs={geometry_cache.get('epochs_with_geometry')}/"
+            f"{geometry_cache.get('epochs_requested')} | "
+            f"satellites={geometry_cache.get('satellite_count')}"
+        ),
     )
 
     target_lat = getattr(job, "target_lat", None)

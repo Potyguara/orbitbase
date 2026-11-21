@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from datetime import datetime, timezone
-from math import sqrt
+from math import cos, sin, sqrt
 from statistics import median
 from typing import Any
 
@@ -119,10 +119,19 @@ def _ecef_distance(
     return sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2)
 
 
+OMEGA_E_DOT = 7.2921151467e-5
+
+
 def _geometric_range(
     receiver_xyz: tuple[float, float, float],
     sat_xyz: dict,
 ) -> float | None:
+    """
+    Distância geométrica receptor-satélite com correção do tempo de
+    propagação (posição do satélite na emissão, usando a velocidade quando
+    disponível) e da rotação da Terra (efeito Sagnac). Sem essas correções o
+    termo delta_rho base->VRS carregava erros decimétricos a métricos.
+    """
     rx, ry, rz = receiver_xyz
     sx = _safe_float(sat_xyz.get("x"))
     sy = _safe_float(sat_xyz.get("y"))
@@ -131,7 +140,25 @@ def _geometric_range(
     if sx is None or sy is None or sz is None:
         return None
 
-    return _ecef_distance(rx, ry, rz, sx, sy, sz)
+    vx = _safe_float(sat_xyz.get("vx")) or 0.0
+    vy = _safe_float(sat_xyz.get("vy")) or 0.0
+    vz = _safe_float(sat_xyz.get("vz")) or 0.0
+
+    rho = _ecef_distance(rx, ry, rz, sx, sy, sz)
+
+    for _ in range(3):
+        tau = rho / C_LIGHT
+        ex = sx - vx * tau
+        ey = sy - vy * tau
+        ez = sz - vz * tau
+        theta = OMEGA_E_DOT * tau
+        cos_t = cos(theta)
+        sin_t = sin(theta)
+        xr = cos_t * ex + sin_t * ey
+        yr = -sin_t * ex + cos_t * ey
+        rho = _ecef_distance(rx, ry, rz, xr, yr, ez)
+
+    return rho
 
 
 def _median_step_seconds(
