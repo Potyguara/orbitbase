@@ -9,6 +9,9 @@ services:
     image: orbitbase-backend:latest
     restart: unless-stopped
     env_file: .env
+    networks:
+      default:
+        aliases: [orbitbase-api]
     environment:
       DATABASE_URL: ${DATABASE_URL:-sqlite:////app/backend/data/orbitbase.db}
     volumes:
