@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from collections import defaultdict
 from datetime import datetime, timezone
 from math import sqrt
@@ -125,10 +127,22 @@ def _extract_sat_code(sat_item: dict) -> str:
     return ""
 
 
+_OBS_KEY_PATTERN = re.compile(r"^[CLPDS][0-9][A-Z]?$")
+
+
 def _extract_obs_map(sat_item: dict) -> dict[str, float | None]:
     raw = sat_item.get("observations")
     if not isinstance(raw, dict):
-        raw = {}
+        raw = sat_item.get("obs")
+    if not isinstance(raw, dict):
+        # O modo com fase gera os observáveis no nível do satélite
+        # ({"satellite": "G05", "C1": ..., "L1": ...}); sem isto o filtro
+        # via um mapa vazio e descartava todos os satélites.
+        raw = {
+            k: v
+            for k, v in sat_item.items()
+            if _OBS_KEY_PATTERN.match(str(k).strip().upper())
+        }
 
     out: dict[str, float | None] = {}
     for k, v in raw.items():

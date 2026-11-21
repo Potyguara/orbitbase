@@ -184,6 +184,31 @@ function buildAdvancedPayload() {
   };
 }
 
+async function downloadAdvancedFiles(jobId) {
+  const response = await fetch(`${API_BASE}/jobs/${jobId}/export-advanced`, {
+    method: "GET",
+    headers: getAuthHeaders(false),
+  });
+  if (!response.ok) {
+    let detail = "Não foi possível baixar os arquivos do modo avançado.";
+    try {
+      detail = (await response.json())?.detail || detail;
+    } catch (_) {}
+    throw new Error(detail);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = match ? match[1] : `job_${jobId}_avancado.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
 let advancedJobsCache = null;
 
 async function getAdvancedJob(jobId) {
@@ -400,6 +425,16 @@ function initAdvancedDashboardPage() {
 
   const form = document.getElementById("advanced-job-form");
   if (!form) return;
+
+  document.getElementById("advanced-download-btn")?.addEventListener("click", async () => {
+    try {
+      const jobId = Number(document.getElementById("advanced-job-id")?.value || 0);
+      if (!jobId) throw new Error("Informe o ID do job para baixar os arquivos.");
+      await downloadAdvancedFiles(jobId);
+    } catch (error) {
+      showAdvancedMessage(error.message || "Falha ao baixar os arquivos.", true);
+    }
+  });
 
   const jobIdInput = document.getElementById("advanced-job-id");
   jobIdInput?.addEventListener("change", () => {
