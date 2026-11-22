@@ -145,3 +145,25 @@ def test_rbmc_and_ephemeris_collection(tmp_path, monkeypatch):
     assert [a for _, a in eph] == ["BASE2320.26n"]
     eph_old = r.collect_ephemeris_files(results, {"nav_path": str(nav)})
     assert [a for _, a in eph_old] == ["apma2320.26n"]
+
+
+def test_geometry_map_carries_satellite_velocity(monkeypatch):
+    from datetime import datetime, timezone
+
+    import app.services.vrs_relative_correction_service as rel
+    from app.services.vrs_unified.unified_service import build_geometry_map
+
+    def fake_cache(nav_file_path, start_dt, end_dt, step_seconds):
+        out = {}
+        for i in range(3):
+            t = start_dt.replace(second=start_dt.second + i)
+            out[t.isoformat()] = {"G05": {"x": 1000.0 * i, "y": -500.0 * i, "z": 7.0}}
+        return out
+
+    monkeypatch.setattr(rel, "build_satellite_xyz_cache_from_rinex_nav", fake_cache)
+    start = datetime(2026, 8, 20, 11, 0, 0, tzinfo=timezone.utc)
+    geo = build_geometry_map("x.nav", start, start)
+    mid = geo["2026-08-20T11:00:01Z"]["G05"]
+    assert mid["vx"] == 1000.0 and mid["vy"] == -500.0 and mid["vz"] == 0.0
+    edge = geo["2026-08-20T11:00:00Z"]["G05"]
+    assert edge["vx"] == 1000.0

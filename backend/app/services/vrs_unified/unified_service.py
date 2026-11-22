@@ -133,12 +133,31 @@ def build_geometry_map(nav_path: str, start_utc: datetime, end_utc: datetime) ->
         end_dt=end_utc.replace(tzinfo=None),
         step_seconds=1,
     )
+    by_time = {
+        datetime.fromisoformat(key).replace(tzinfo=timezone.utc): sats
+        for key, sats in cache.items()
+    }
+    one = timedelta(seconds=1)
     out = {}
-    for key, sats in cache.items():
-        dt = datetime.fromisoformat(key).replace(tzinfo=timezone.utc)
-        out[_epoch_to_iso(dt)] = {
-            s: {"x": v["x"], "y": v["y"], "z": v["z"]} for s, v in sats.items()
-        }
+    for dt, sats in by_time.items():
+        prev_sats = by_time.get(dt - one) or {}
+        next_sats = by_time.get(dt + one) or {}
+        epoch = {}
+        for s, v in sats.items():
+            item = {"x": v["x"], "y": v["y"], "z": v["z"]}
+            # velocidade por diferença finita: sem ela o tempo de propagação
+            # (~70 ms, ~270 m de movimento do satélite) ficava fora do cálculo
+            # da distância e gerava viés proporcional à linha de base
+            a, b, span = prev_sats.get(s), next_sats.get(s), 2.0
+            if a is None:
+                a, span = v, 1.0
+            if b is None:
+                b, span = v, (1.0 if span == 2.0 else 0.0)
+            if span > 0:
+                for axis in ("x", "y", "z"):
+                    item["v" + axis] = (b[axis] - a[axis]) / span
+            epoch[s] = item
+        out[_epoch_to_iso(dt)] = epoch
     return out
 
 
