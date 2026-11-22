@@ -90,7 +90,9 @@ def _parse_additional_sat_lines(
 
     while len(sats) < total and idx < len(lines):
         line = lines[idx]
-        block = line[32:68] if len(line) >= 68 else line
+        # a lista de satélites das linhas de continuação fica sempre nas
+        # colunas 33-68; linhas mais curtas (última linha da lista) também
+        block = line[32:68]
 
         for i in range(0, len(block), 3):
             sat = _normalize_satellite_code(block[i : i + 3])

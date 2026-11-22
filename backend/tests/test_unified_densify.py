@@ -199,3 +199,31 @@ def test_station_navigation_files_adds_glonass_from_same_folder(tmp_path):
              "best_observation_file": str(tmp_path / "apma2321.26d")}
     files = [p.split("/")[-1] for p in station_navigation_files(state)]
     assert files == ["apma2321.26n", "apma2321.26g"]
+
+
+def test_reader_keeps_satellites_on_short_third_continuation_line(tmp_path):
+    from datetime import datetime, timezone
+
+    from app.services.vrs_advanced.advanced_rinex_observation_reader_service import (
+        extract_rinex_observations_for_window,
+    )
+
+    sats = [f"E{i:02d}" for i in range(1, 12)] + [f"G{i:02d}" for i in range(1, 14)] + \
+        ["R05", "R06", "R07"]
+    header = ("     2.11           OBSERVATION DATA    M (MIXED)".ljust(60) + "RINEX VERSION / TYPE\n"
+              + "     2    C1    L1".ljust(60) + "# / TYPES OF OBSERV\n"
+              + "".ljust(60) + "END OF HEADER\n")
+    first = " 26  8 20 11  0  0.0000000  0" + f"{len(sats):3d}" + "".join(sats[:12])
+    lines = [first,
+             " " * 32 + "".join(sats[12:24]),
+             " " * 32 + "".join(sats[24:])]
+    for i, _ in enumerate(sats):
+        lines.append(f"{20000000.0 + i:14.3f}  {100000000.0 + i:14.3f}  ")
+    path = tmp_path / "x.26o"
+    path.write_text(header + "\n".join(lines) + "\n")
+    data = extract_rinex_observations_for_window(
+        path, datetime(2026, 8, 20, tzinfo=timezone.utc), datetime(2026, 8, 21, tzinfo=timezone.utc))
+    got = [s["satellite"] for s in data["epochs"][0]["satellites"]]
+    assert got == sats
+    r07 = data["epochs"][0]["satellites"][-1]["observations"]
+    assert r07["C1"] == 20000000.0 + len(sats) - 1
