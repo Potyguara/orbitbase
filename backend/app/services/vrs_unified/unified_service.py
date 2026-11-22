@@ -112,9 +112,11 @@ def _basic_epochs_to_master(rinex_path: Path, target_xyz) -> dict:
         dt = datetime.fromisoformat(ep["epoch_utc"].replace("Z", "+00:00"))
         obs_map = {}
         for item in ep["satellites"]:
-            sat = (item["satellite"] or "").strip().upper()
+            sat = (item["satellite"] or "").strip().upper().replace(" ", "0")
             if sat.isdigit():
                 sat = f"G{int(sat):02d}"
+            elif len(sat) == 2 and sat[0].isalpha():
+                sat = f"{sat[0]}0{sat[1]}"
             obs_map[sat] = {k: v for k, v in item["observations"].items() if v}
         epochs.append({"epoch": dt, "epoch_iso": _epoch_to_iso(dt), "obs_map": obs_map})
     epochs.sort(key=lambda e: e["epoch"])
@@ -159,6 +161,63 @@ def build_geometry_map(nav_path: str, start_utc: datetime, end_utc: datetime) ->
             epoch[s] = item
         out[_epoch_to_iso(dt)] = epoch
     return out
+
+
+def _glonass_nav_files(nav_paths: list[str]) -> list[str]:
+    out = []
+    for p in nav_paths:
+        name = Path(p).name.lower()
+        if name.endswith("g") or name.endswith("g.gz") or "_rn." in name or "_mn." in name:
+            out.append(p)
+    return out
+
+
+def add_glonass_geometry(geometry: dict, nav_paths: list[str], start_utc: datetime,
+                         end_utc: datetime) -> dict[str, int]:
+    """Acrescenta posições GLONASS (1 s) ao mapa de geometria; devolve os canais."""
+    from app.services.vrs_unified.glonass_nav import (
+        glonass_channels,
+        glonass_positions,
+        merge_glonass_nav,
+    )
+
+    files = _glonass_nav_files(nav_paths)
+    if not files:
+        return {}
+    records = merge_glonass_nav(files)
+    channels = glonass_channels(records)
+    if not channels:
+        return {}
+    start = start_utc.replace(tzinfo=None, microsecond=0)
+    times = []
+    t = start
+    while t <= end_utc.replace(tzinfo=None):
+        times.append(t)
+        t += timedelta(seconds=1)
+    positions = glonass_positions({s: r for s, r in records.items() if s in channels}, times)
+    for t, sats in positions.items():
+        if not sats:
+            continue
+        key = _epoch_to_iso(t.replace(tzinfo=timezone.utc))
+        geometry.setdefault(key, {}).update(sats)
+    return channels
+
+
+def _wavelength_selector(channels: dict[str, int]):
+    from app.services.vrs_advanced.advanced_observation_interpolation_service import (
+        _gps_wavelength,
+    )
+    from app.services.vrs_unified.glonass_nav import glonass_wavelength
+
+    def for_sat(sat: str):
+        if sat.startswith("G"):
+            return _gps_wavelength
+        if sat.startswith("R") and sat in channels:
+            k = channels[sat]
+            return lambda code: glonass_wavelength(code, k)
+        return None
+
+    return for_sat
 
 
 def densify_basic_output(
@@ -250,9 +309,11 @@ def _master_from_reader(data: dict, marker_xyz, code: str) -> dict:
         dt = datetime.fromisoformat(ep["epoch_utc"].replace("Z", "+00:00"))
         obs_map = {}
         for item in ep["satellites"]:
-            sat = (item["satellite"] or "").strip().upper()
+            sat = (item["satellite"] or "").strip().upper().replace(" ", "0")
             if sat.isdigit():
                 sat = f"G{int(sat):02d}"
+            elif len(sat) == 2 and sat[0].isalpha():
+                sat = f"{sat[0]}0{sat[1]}"
             obs_map[sat] = {k: v for k, v in item["observations"].items() if v}
         epochs.append({"epoch": dt, "epoch_iso": _epoch_to_iso(dt), "obs_map": obs_map})
     epochs.sort(key=lambda e: e["epoch"])
@@ -284,6 +345,7 @@ def build_master_transport_epochs(
     end_utc: datetime,
     step_seconds: int,
     min_quality_ratio: float = 0.8,
+    use_glonass: bool = True,
 ) -> tuple[list[dict], int, dict]:
     """Transporte geométrico da base mais próxima com dados bons na janela.
 
@@ -308,6 +370,17 @@ def build_master_transport_epochs(
             tried.append({"station": code, "dist_km": round(dist_m / 1000, 1), "reason": f"qualidade {ratio:.2f}"})
             continue
         geometry = build_geometry_map(str(data["nav_path"]), start_utc - margin, end_utc + margin)
+        glonass = {"satellites": 0}
+        wavelength_for = None
+        systems: tuple[str, ...] = ("G",)
+        if use_glonass:
+            channels = add_glonass_geometry(
+                geometry, data.get("nav_paths") or [], start_utc - margin, end_utc + margin
+            )
+            if channels:
+                systems = ("G", "R")
+                wavelength_for = _wavelength_selector(channels)
+                glonass = {"satellites": len(channels)}
         grid = build_target_grid(start_utc, end_utc, step_seconds)
         epochs, skipped = _build_output_epochs_phase_dense(
             master_base=master,
@@ -316,6 +389,11 @@ def build_master_transport_epochs(
             time_grid=grid,
             max_gap_seconds=MAX_GAP_SECONDS,
             min_satellites_per_epoch=4,
+            systems=systems,
+            wavelength_for=wavelength_for,
+        )
+        glonass["observations"] = sum(
+            1 for ep in epochs for o in ep["observations"] if o["satellite"].startswith("R")
         )
         info = {
             "stations_used": [code],
@@ -326,6 +404,8 @@ def build_master_transport_epochs(
             "nav_path": str(data["nav_path"]),
             "nav_paths": data.get("nav_paths") or [str(data["nav_path"])],
             "requested_epochs": len(grid),
+            "systems": list(systems),
+            "glonass": glonass,
         }
         return epochs, skipped, info
     raise ValueError(f"Nenhuma base com dados bons na janela: {tried}")
@@ -503,7 +583,8 @@ def _finish_unified(
         antenna_delta_hen=(0.0, 0.0, 0.0),
         interval_seconds=float(step_seconds),
         require_phase_observables=True,
-        output_systems=["G"],
+        output_systems=["G", "R"],
+        phase_systems=("G", "R"),
         forced_obs_types=["C1", "P1", "L1", "C2", "P2", "L2"],
     )
     nav_outputs = _copy_navigation_files(

@@ -167,3 +167,24 @@ def test_geometry_map_carries_satellite_velocity(monkeypatch):
     assert mid["vx"] == 1000.0 and mid["vy"] == -500.0 and mid["vz"] == 0.0
     edge = geo["2026-08-20T11:00:00Z"]["G05"]
     assert edge["vx"] == 1000.0
+
+
+def test_writer_outputs_mixed_rinex_with_glonass(tmp_path):
+    from app.services.vrs_advanced.advanced_rinex_writer_service import (
+        write_advanced_rinex_from_seed,
+    )
+
+    obs = {"C1": 2.1e7, "P1": 2.1e7, "L1": 1.1e8, "C2": 2.1e7, "P2": 2.1e7, "L2": 0.9e8}
+    epochs = [{"epoch": "2026-08-20T11:00:00Z", "observations": [
+        {"satellite": s, **obs} for s in ("G05", "G07", "G12", "R11")]}]
+    out = write_advanced_rinex_from_seed(
+        str(tmp_path / "VRS.26o"), {"epochs": epochs}, require_phase_observables=True,
+        output_systems=["G", "R"], phase_systems=("G", "R"),
+        forced_obs_types=["C1", "P1", "L1", "C2", "P2", "L2"])
+    text = open(out).read()
+    assert "OBSERVATION DATA    M" in text
+    assert "R11" in text
+    gps_only = write_advanced_rinex_from_seed(
+        str(tmp_path / "G.26o"), {"epochs": epochs}, require_phase_observables=True,
+        output_systems=["G", "R"], forced_obs_types=["C1", "P1", "L1", "C2", "P2", "L2"])
+    assert "R11" not in open(gps_only).read()

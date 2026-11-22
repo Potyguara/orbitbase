@@ -717,8 +717,11 @@ _DENSE_CODE_KEYS = ("C1", "P1", "C2", "P2")
 _DENSE_PHASE_KEYS = ("L1", "L2")
 
 
-def _residuals_at_master_epoch(rec: dict, sat_xyz: dict, master_xyz) -> dict | None:
-    """Observáveis em metros menos a distância geométrica (com troposfera) base-satélite."""
+def _residuals_at_master_epoch(rec: dict, sat_xyz: dict, master_xyz, wavelength=None) -> dict | None:
+    """Observáveis em metros menos a distância geométrica (com troposfera) base-satélite.
+
+    wavelength: função opcional obs_code -> λ (GLONASS depende do canal)."""
+    wavelength = wavelength or _gps_wavelength
     rho = _range_with_tropo(master_xyz, sat_xyz)
     if rho is None:
         return None
@@ -729,9 +732,9 @@ def _residuals_at_master_epoch(rec: dict, sat_xyz: dict, master_xyz) -> dict | N
             out[key] = value - rho
     for key in _DENSE_PHASE_KEYS:
         value = _safe_float(rec.get(key))
-        wavelength = _gps_wavelength(key)
-        if value is not None and wavelength:
-            out[key] = value * wavelength - rho
+        lam = wavelength(key)
+        if value is not None and lam:
+            out[key] = value * lam - rho
     for key in ("S1", "S2"):
         value = _safe_float(rec.get(key))
         if value is not None:
@@ -746,8 +749,13 @@ def _build_output_epochs_phase_dense(
     time_grid: list[datetime],
     max_gap_seconds: float,
     min_satellites_per_epoch: int,
+    systems: tuple[str, ...] = ("G",),
+    wavelength_for=None,
 ) -> tuple[list[dict], int]:
-    """Fase GPS na grade pedida (ex.: 1 s) a partir da base mestra (ex.: 15 s).
+    """Fase na grade pedida (ex.: 1 s) a partir da base mestra (ex.: 15 s).
+
+    systems: constelações transportadas (padrão só GPS). wavelength_for(sat)
+    devolve a função obs_code -> λ do satélite; None = comprimentos GPS.
 
     Para cada satélite, o resíduo r = observável·λ - ρ(base, sat) varia devagar
     (relógios, atmosfera, ambiguidade constante). Ele é interpolado linearmente
@@ -759,17 +767,25 @@ def _build_output_epochs_phase_dense(
     epoch_times = [ep["epoch"] for ep in master_epochs]
     residual_cache: dict[int, dict[str, dict]] = {}
 
+    def _lam(sat: str):
+        if wavelength_for is None:
+            return _gps_wavelength if str(sat).startswith("G") else None
+        return wavelength_for(sat)
+
     def residuals(idx: int) -> dict[str, dict]:
         if idx not in residual_cache:
             ep = master_epochs[idx]
             geom = geometry_epoch_map.get(ep["epoch_iso"]) or {}
             out = {}
             for sat, rec in (ep.get("obs_map") or {}).items():
-                if not str(sat).startswith("G") or sat not in geom:
+                if str(sat)[:1] not in systems or sat not in geom:
                     continue
                 if not _obs_has_dual_phase_gps(rec):
                     continue
-                r = _residuals_at_master_epoch(rec, geom[sat], master_xyz)
+                lam = _lam(sat)
+                if lam is None:
+                    continue
+                r = _residuals_at_master_epoch(rec, geom[sat], master_xyz, lam)
                 if r:
                     out[sat] = r
             residual_cache[idx] = out
@@ -821,7 +837,7 @@ def _build_output_epochs_phase_dense(
                     break
                 meters = a[key] + (b[key] - a[key]) * alpha + rho_t
                 if key in _DENSE_PHASE_KEYS:
-                    out[key] = meters / _gps_wavelength(key)
+                    out[key] = meters / _lam(sat)(key)
                 else:
                     out[key] = meters
             if jump:

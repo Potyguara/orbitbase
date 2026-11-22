@@ -171,3 +171,49 @@ def test_antenna_delta_moves_base_up():
     _, _, h0 = _geodetic_lat_h(marker)
     _, _, h1 = _geodetic_lat_h(arp)
     assert abs((h1 - h0) - 0.008) < 1e-4
+
+
+def test_phase_dense_transports_glonass_with_channel_wavelength():
+    from app.services.vrs_unified.glonass_nav import glonass_wavelength
+
+    start = T0 + timedelta(seconds=22)
+    end = T0 + timedelta(seconds=40)
+    grid, bases, geometry, _ = _build_inputs(start, end)
+    k = -3
+    lam = {"L1": glonass_wavelength("L1", k), "L2": glonass_wavelength("L2", k)}
+    for ep in bases[0]["epochs"]:
+        t = datetime.fromisoformat(ep["epoch_utc"].replace("Z", "+00:00"))
+        rho = _range_with_tropo(MASTER, _sat_at("G07", t))
+        r = _residual("G07", t) + 7.0
+        ep["satellites"].append({"satellite": "R11", "observations": {
+            "C1": rho + r, "P2": rho + r, "L1": (rho + r) / lam["L1"], "L2": (rho + r) / lam["L2"]}})
+    for g in geometry["epochs"]:
+        g["satellites"]["R11"] = dict(g["satellites"]["G07"])
+
+    from app.services.vrs_advanced.advanced_observation_interpolation_service import (
+        _build_output_epochs_phase_dense, _gps_wavelength,
+    )
+
+    master = {"xyz": MASTER, "epochs": [
+        {"epoch": datetime.fromisoformat(ep["epoch_utc"].replace("Z", "+00:00")),
+         "epoch_iso": ep["epoch_utc"],
+         "obs_map": {s["satellite"]: s["observations"] for s in ep["satellites"]}}
+        for ep in bases[0]["epochs"]]}
+    geo = {g["epoch"]: g["satellites"] for g in geometry["epochs"]}
+
+    def for_sat(sat):
+        if sat.startswith("G"):
+            return _gps_wavelength
+        return lambda code: lam.get(code)
+
+    epochs, skipped = _build_output_epochs_phase_dense(
+        master, geo, TARGET, grid, 30.0, 4, systems=("G", "R"), wavelength_for=for_sat)
+    assert skipped == 0
+    for ep in epochs:
+        t = datetime.fromisoformat(ep["epoch"].replace("Z", "+00:00"))
+        r11 = [o for o in ep["observations"] if o["satellite"] == "R11"][0]
+        expected = _range_with_tropo(TARGET, _sat_at("G07", t)) + _residual("G07", t) + 7.0
+        assert abs(r11["L1"] * lam["L1"] - expected) < 1e-3
+
+    only_gps, _ = _build_output_epochs_phase_dense(master, geo, TARGET, grid, 30.0, 4)
+    assert all(o["satellite"].startswith("G") for ep in only_gps for o in ep["observations"])

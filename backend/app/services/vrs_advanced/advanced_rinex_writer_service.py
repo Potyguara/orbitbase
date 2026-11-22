@@ -276,6 +276,7 @@ def _is_satellite_usable_for_writer(
     sat_code: str,
     obs_map: dict[str, float | None],
     require_phase_observables: bool,
+    phase_systems: tuple[str, ...] = ("G",),
 ) -> bool:
     sat_code = _normalize_satellite_code(sat_code)
     if not sat_code:
@@ -286,7 +287,7 @@ def _is_satellite_usable_for_writer(
         return False
 
     if require_phase_observables:
-        if system != "G":
+        if system not in phase_systems:
             return False
         return _is_dual_frequency_phase_usable(obs_map)
 
@@ -349,7 +350,9 @@ def write_advanced_rinex_from_seed(
     require_phase_observables: bool = True,
     output_systems: list[str] | tuple[str, ...] | set[str] | None = None,
     forced_obs_types: list[str] | None = None,
+    phase_systems: tuple[str, ...] = ("G",),
 ) -> str:
+    phase_systems = tuple(str(x).strip().upper() for x in phase_systems)
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -395,6 +398,7 @@ def write_advanced_rinex_from_seed(
                 sat_code=sat_code,
                 obs_map=obs_map,
                 require_phase_observables=require_phase_observables,
+                phase_systems=phase_systems,
             ):
                 continue
 
@@ -455,6 +459,7 @@ def write_advanced_rinex_from_seed(
                 sat_code=sat_code,
                 obs_map=filtered_map,
                 require_phase_observables=require_phase_observables,
+                phase_systems=phase_systems,
             ):
                 new_sat_records.append((sat_code, filtered_map))
 
@@ -493,7 +498,8 @@ def write_advanced_rinex_from_seed(
         interval_seconds = _safe_float(advanced_seed.get("interval_seconds"), 1.0)
 
     if require_phase_observables:
-        rinex_system = "G"
+        present = {code[:1] for _, recs in epoch_records for code, _ in recs}
+        rinex_system = "M" if len(present) > 1 else (next(iter(present)) if present else "G")
     else:
         rinex_system = "M" if len(output_systems) > 1 else next(iter(output_systems))
 

@@ -101,14 +101,21 @@ def parse_rinex2(path: Path) -> tuple[dict, dict]:
     return {"antenna_delta_hen": data.get("antenna_delta_hen") or [0, 0, 0]}, out
 
 
-def iono_free(obs: dict) -> tuple[float | None, float | None]:
+def iono_free(obs: dict, freqs: tuple[float, float] = (F1, F2)) -> tuple[float | None, float | None]:
+    f1, f2 = freqs
+    a = f1 ** 2 / (f1 ** 2 - f2 ** 2)
+    b = f2 ** 2 / (f1 ** 2 - f2 ** 2)
     c1 = obs.get("C1") or obs.get("P1")
     p2 = obs.get("P2") or obs.get("C2")
     l1 = obs.get("L1")
     l2 = obs.get("L2")
-    pc = IF_A * c1 - IF_B * p2 if c1 and p2 else None
-    lc = IF_A * l1 * L1_WL - IF_B * l2 * L2_WL if l1 and l2 else None
+    pc = a * c1 - b * p2 if c1 and p2 else None
+    lc = a * l1 * (C / f1) - b * l2 * (C / f2) if l1 and l2 else None
     return pc, lc
+
+
+def glonass_freqs(channel: int) -> tuple[float, float]:
+    return 1602.0e6 + channel * 0.5625e6, 1246.0e6 + channel * 0.4375e6
 
 
 def solve3(ata, atb):
@@ -143,7 +150,7 @@ def _sat_velocity(sat_cache, key, sat):
 
 
 def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_elev=10.0,
-            clock_rate_corr=True):
+            clock_rate_corr=True, system="G", channels=None):
     """clock_rate_corr: remove o efeito do relógio de cada receptor na etiqueta de
     tempo (-ρ̇·Δδt). A VRS herda o relógio da mestra e a estação real tem o seu;
     Δδt vem da média por época da diferença de código."""
@@ -171,8 +178,14 @@ def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_ele
         sd_code, sd_phase, ep_rows = [], [], []
         rho_dot = {}
         for sat, v_obs in vrs_epochs[key].items():
-            if not sat.startswith("G") or sat not in real_epochs[key] or sat not in geom:
+            if not sat.startswith(system) or sat not in real_epochs[key] or sat not in geom:
                 continue
+            if system == "R":
+                if not channels or sat not in channels:
+                    continue
+                freqs = glonass_freqs(channels[sat])
+            else:
+                freqs = (F1, F2)
             sxyz = geom[sat]
             d = (sxyz["x"] - marker_xyz[0], sxyz["y"] - marker_xyz[1], sxyz["z"] - marker_xyz[2])
             r = math.sqrt(dot(d, d))
@@ -182,8 +195,8 @@ def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_ele
                 continue
             vel = _sat_velocity(sat_cache, key, sat)
             rho_dot[sat] = dot(u, vel) if vel else 0.0
-            pc_v, lc_v = iono_free(v_obs)
-            pc_r, lc_r = iono_free(real_epochs[key][sat])
+            pc_v, lc_v = iono_free(v_obs, freqs)
+            pc_r, lc_r = iono_free(real_epochs[key][sat], freqs)
             # obs reais no ARP (marco + dh): distância menor em dh*sin(elev)
             arp_corr = dh * math.sin(math.radians(elev))
             if pc_v is not None and pc_r is not None:
@@ -473,6 +486,33 @@ def run_case(job_id, target_code, base_codes, date, start_local, minutes, keep=F
     raw = compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache,
                   clock_rate_corr=False)
     case["phase_bias_enu_m_sem_corr_relogio"] = raw.get("phase_bias_enu_m")
+
+    # GLONASS: mesmas métricas, só com satélites R (relógio centrado por sistema)
+    try:
+        from app.services.vrs_unified.glonass_nav import (
+            glonass_channels, glonass_positions, merge_glonass_nav,
+        )
+        from app.services.vrs_unified.unified_service import _glonass_nav_files
+
+        files = _glonass_nav_files([str(x) for x in (state.get("navigation_files") or [])])
+        records = merge_glonass_nav(files) if files else {}
+        channels = glonass_channels(records)
+        vrs_r = sum(1 for ep in vrs_epochs.values() for s_ in ep if s_.startswith("R"))
+        case["glonass_obs_vrs"] = vrs_r
+        if channels and vrs_r:
+            keys = sorted(set(vrs_epochs) & set(real_epochs))
+            times = sorted({datetime.fromisoformat(k) + timedelta(seconds=d)
+                            for k in keys for d in (-15, 0, 15)})
+            pos = glonass_positions(records, times)
+            r_cache = {t.isoformat(): sats for t, sats in pos.items()}
+            g = compare(vrs_epochs, real_epochs, real_header, marker_xyz, r_cache,
+                        system="R", channels=channels)
+            case["glonass"] = {k: g.get(k) for k in (
+                "epochs_compared", "satellites_compared", "code_bias_enu_m", "code_rms_m",
+                "phase_rate_rms_cm", "phase_drift_max_cm", "phase_slips",
+                "phase_bias_enu_m", "phase_bias_sigma_enu_m", "phase_bias_rms_cm")}
+    except Exception as exc:  # noqa: BLE001
+        case["glonass_error"] = f"{type(exc).__name__}: {exc}"
 
     if not keep:
         shutil.rmtree(job_root, ignore_errors=True)
