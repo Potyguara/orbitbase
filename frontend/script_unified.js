@@ -104,9 +104,9 @@
             ${ready ? "Reprocessar" : "Processar"}
           </button>
           <div class="ob-dl-group">
-            <button class="ob-btn ob-btn-dl" type="button" ${dis} onclick="obDownload(${job.id}, 'rinex')">RINEX</button>
-            <button class="ob-btn ob-btn-dl" type="button" ${dis} onclick="obDownload(${job.id}, 'rbmc')">RBMC</button>
-            <button class="ob-btn ob-btn-dl" type="button" ${dis} onclick="obDownload(${job.id}, 'ephemeris')">EFEMÉRIDES</button>
+            <button class="ob-btn ob-btn-dl" type="button" ${dis} onclick="obDownload(${job.id}, 'rinex', this)">RINEX</button>
+            <button class="ob-btn ob-btn-dl" type="button" ${dis} onclick="obDownload(${job.id}, 'rbmc', this)">RBMC</button>
+            <button class="ob-btn ob-btn-dl" type="button" ${dis} onclick="obDownload(${job.id}, 'ephemeris', this)">EFEMÉRIDES</button>
           </div>
         </div>
       </article>`;
@@ -127,15 +127,61 @@
     });
   };
 
-  window.obDownload = async function (jobId, kind) {
+  function downloadNotice(text, isError) {
+    // aviso visível mesmo com o modal de processamento aberto
+    let box = document.getElementById("ob-download-notice");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "ob-download-notice";
+      box.className = "ob-download-notice";
+      document.body.appendChild(box);
+    }
+    box.textContent = text;
+    box.classList.toggle("ob-download-notice-error", !!isError);
+    box.classList.add("ob-download-notice-show");
+    clearTimeout(box._timer);
+    if (text) box._timer = setTimeout(() => box.classList.remove("ob-download-notice-show"), isError ? 9000 : 4000);
+  }
+
+  const LABELS = { rinex: "RINEX", rbmc: "RBMC", ephemeris: "EFEMÉRIDES" };
+
+  window.obDownload = async function (jobId, kind, button) {
+    const btn = button || (window.event && window.event.currentTarget) || null;
+    const label = LABELS[kind] || kind;
+    if (btn) { btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = "Baixando…"; }
+    downloadNotice(`Preparando ${label}… arquivos de 1 s podem ter dezenas de MB.`);
     try {
       const res = await fetch(`${API}/jobs/${jobId}/download/${kind}`, { headers: headers() });
       if (!res.ok) {
-        let detail = "Não foi possível baixar o arquivo.";
+        let detail = `Não foi possível baixar ${label} (erro ${res.status}).`;
         try { detail = (await res.json())?.detail || detail; } catch (_) {}
         throw new Error(detail);
       }
-      const blob = await res.blob();
+      const total = Number(res.headers.get("Content-Length") || 0);
+      let blob;
+      if (res.body && res.body.getReader) {
+        const reader = res.body.getReader();
+        const chunks = [];
+        let received = 0;
+        let last = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          received += value.length;
+          const now = Date.now();
+          if (now - last > 400) {
+            last = now;
+            const mb = (received / 1048576).toFixed(1);
+            const pct = total ? ` (${Math.round((100 * received) / total)}%)` : "";
+            downloadNotice(`Baixando ${label}: ${mb} MB${pct}. Não feche nem recarregue a página.`);
+            if (btn) btn.textContent = total ? `${Math.round((100 * received) / total)}%` : `${mb} MB`;
+          }
+        }
+        blob = new Blob(chunks, { type: res.headers.get("Content-Type") || "application/octet-stream" });
+      } else {
+        blob = await res.blob();
+      }
       const disposition = res.headers.get("Content-Disposition") || "";
       const match = disposition.match(/filename="?([^"]+)"?/);
       const url = URL.createObjectURL(blob);
@@ -145,9 +191,13 @@
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
+      // revogar na hora cancela downloads grandes em alguns navegadores
+      setTimeout(() => URL.revokeObjectURL(url), 120000);
+      downloadNotice(`${label}: download iniciado (${(blob.size / 1048576).toFixed(1)} MB).`);
     } catch (error) {
-      showMessage("job-message", error.message || "Falha no download.", true);
+      downloadNotice(error.message || `Falha no download de ${label}.`, true);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label || label; }
     }
   };
 
@@ -155,9 +205,9 @@
     return `
       <p>Base gerada. Baixe os arquivos:</p>
       <div class="ob-dl-group">
-        <button class="ob-btn ob-btn-dl" type="button" onclick="obDownload(${jobId}, 'rinex')">RINEX</button>
-        <button class="ob-btn ob-btn-dl" type="button" onclick="obDownload(${jobId}, 'rbmc')">RBMC</button>
-        <button class="ob-btn ob-btn-dl" type="button" onclick="obDownload(${jobId}, 'ephemeris')">EFEMÉRIDES</button>
+        <button class="ob-btn ob-btn-dl" type="button" onclick="obDownload(${jobId}, 'rinex', this)">RINEX</button>
+        <button class="ob-btn ob-btn-dl" type="button" onclick="obDownload(${jobId}, 'rbmc', this)">RBMC</button>
+        <button class="ob-btn ob-btn-dl" type="button" onclick="obDownload(${jobId}, 'ephemeris', this)">EFEMÉRIDES</button>
       </div>`;
   }
 

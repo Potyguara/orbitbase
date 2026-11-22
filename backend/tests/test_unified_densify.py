@@ -227,3 +227,22 @@ def test_reader_keeps_satellites_on_short_third_continuation_line(tmp_path):
     assert got == sats
     r07 = data["epochs"][0]["satellites"][-1]["observations"]
     assert r07["C1"] == 20000000.0 + len(sats) - 1
+
+
+def test_zipped_rinex_is_cached_and_refreshed(tmp_path):
+    import os
+    import zipfile
+
+    from app.routers.vrs_unified import zipped_rinex
+
+    rinex = tmp_path / "BASE2320.26o"
+    rinex.write_text("A" * 10000)
+    packed = zipped_rinex(rinex)
+    assert packed.name == "BASE2320.26o.zip"
+    assert packed.stat().st_size < 1000
+    with zipfile.ZipFile(packed) as zf:
+        assert zf.namelist() == ["BASE2320.26o"]
+    rinex.write_text("B" * 10000)
+    os.utime(rinex, (packed.stat().st_mtime + 5, packed.stat().st_mtime + 5))
+    with zipfile.ZipFile(zipped_rinex(rinex)) as zf:
+        assert zf.read("BASE2320.26o").startswith(b"B")

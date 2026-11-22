@@ -211,11 +211,26 @@ def download_rinex(
     rinex = _local_file(results, (summary or {}).get("rinex_path"))
     if rinex is None:
         raise HTTPException(status_code=404, detail="Processe o job primeiro.")
+    packed = zipped_rinex(rinex)
     return StreamingResponse(
-        open(rinex, "rb"),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{rinex.name}"'},
+        open(packed, "rb"),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{packed.name}"',
+            "Content-Length": str(packed.stat().st_size),
+        },
     )
+
+
+def zipped_rinex(rinex: Path) -> Path:
+    """RINEX de 1 s passa de 60 MB; compactado cai ~8x. Gera uma vez por processamento."""
+    packed = rinex.with_name(rinex.name + ".zip")
+    if not packed.exists() or packed.stat().st_mtime < rinex.stat().st_mtime:
+        tmp = packed.with_name(packed.name + ".tmp")
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            zf.write(rinex, arcname=rinex.name)
+        tmp.replace(packed)
+    return packed
 
 
 def collect_ephemeris_files(results: Path, summary: dict) -> list[tuple[Path, str]]:
