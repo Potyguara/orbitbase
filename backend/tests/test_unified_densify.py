@@ -229,7 +229,7 @@ def test_reader_keeps_satellites_on_short_third_continuation_line(tmp_path):
     assert r07["C1"] == 20000000.0 + len(sats) - 1
 
 
-def test_zipped_rinex_is_cached_and_refreshed(tmp_path):
+def test_zipped_rinex_bundles_observation_and_navigation(tmp_path):
     import os
     import zipfile
 
@@ -237,11 +237,12 @@ def test_zipped_rinex_is_cached_and_refreshed(tmp_path):
 
     rinex = tmp_path / "BASE2320.26o"
     rinex.write_text("A" * 10000)
+    (tmp_path / "BASE2320.26n").write_text("nav gps")
+    (tmp_path / "BASE2320.26g").write_text("nav glonass")
     packed = zipped_rinex(rinex)
-    assert packed.name == "BASE2320.26o.zip"
-    assert packed.stat().st_size < 1000
+    assert packed.name == "BASE2320.zip"
     with zipfile.ZipFile(packed) as zf:
-        assert zf.namelist() == ["BASE2320.26o"]
+        assert sorted(zf.namelist()) == ["BASE2320.26g", "BASE2320.26n", "BASE2320.26o"]
     rinex.write_text("B" * 10000)
     os.utime(rinex, (packed.stat().st_mtime + 5, packed.stat().st_mtime + 5))
     with zipfile.ZipFile(zipped_rinex(rinex)) as zf:

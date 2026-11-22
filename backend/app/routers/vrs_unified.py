@@ -223,12 +223,22 @@ def download_rinex(
 
 
 def zipped_rinex(rinex: Path) -> Path:
-    """RINEX de 1 s passa de 60 MB; compactado cai ~8x. Gera uma vez por processamento."""
-    packed = rinex.with_name(rinex.name + ".zip")
-    if not packed.exists() or packed.stat().st_mtime < rinex.stat().st_mtime:
+    """Pacote como o de um receptor: SSSSDDD0.YYo + .YYn (GPS) + .YYg (GLONASS).
+
+    RINEX de 1 s passa de 60 MB; compactado cai ~5-8x. Gerado uma vez por
+    processamento e refeito se algum dos arquivos mudar."""
+    stem = rinex.name[:-1]  # "BASE2320.26"
+    members = [rinex] + [
+        rinex.with_name(stem + ext) for ext in ("n", "g")
+        if rinex.with_name(stem + ext).exists()
+    ]
+    packed = rinex.with_name(rinex.name.split(".")[0] + ".zip")
+    newest = max(m.stat().st_mtime for m in members)
+    if not packed.exists() or packed.stat().st_mtime < newest:
         tmp = packed.with_name(packed.name + ".tmp")
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-            zf.write(rinex, arcname=rinex.name)
+            for m in members:
+                zf.write(m, arcname=m.name)
         tmp.replace(packed)
     return packed
 
