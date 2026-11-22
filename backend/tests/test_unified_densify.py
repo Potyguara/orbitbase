@@ -188,3 +188,14 @@ def test_writer_outputs_mixed_rinex_with_glonass(tmp_path):
         str(tmp_path / "G.26o"), {"epochs": epochs}, require_phase_observables=True,
         output_systems=["G", "R"], forced_obs_types=["C1", "P1", "L1", "C2", "P2", "L2"])
     assert "R11" not in open(gps_only).read()
+
+
+def test_station_navigation_files_adds_glonass_from_same_folder(tmp_path):
+    from app.services.vrs_unified.unified_service import station_navigation_files
+
+    for name in ("apma2321.26n", "apma2321.26g", "apma2321.26l", "apma2321.26d", "notes.txt"):
+        (tmp_path / name).write_text("x")
+    state = {"navigation_files": [str(tmp_path / "apma2321.26n")],
+             "best_observation_file": str(tmp_path / "apma2321.26d")}
+    files = [p.split("/")[-1] for p in station_navigation_files(state)]
+    assert files == ["apma2321.26n", "apma2321.26g"]

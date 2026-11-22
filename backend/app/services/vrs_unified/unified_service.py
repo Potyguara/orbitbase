@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -167,7 +168,7 @@ def _glonass_nav_files(nav_paths: list[str]) -> list[str]:
     out = []
     for p in nav_paths:
         name = Path(p).name.lower()
-        if name.endswith("g") or name.endswith("g.gz") or "_rn." in name or "_mn." in name:
+        if re.search(r"\.\d{2}g(\.gz)?$", name) or re.search(r"_(rn|mn)\.rnx(\.gz)?$", name):
             out.append(p)
     return out
 
@@ -295,8 +296,28 @@ def _load_station_epochs(code: str, session_date: str, start_utc: datetime, end_
     path = Path(convert_hatanaka_to_rinex(str(obs)))
     data = extract_rinex_observations_for_window(path, start_utc, end_utc)
     data["nav_path"] = state.get("best_navigation_file")
-    data["nav_paths"] = [str(x) for x in (state.get("navigation_files") or [])]
+    data["nav_paths"] = station_navigation_files(state)
     return data
+
+
+def station_navigation_files(state: dict) -> list[str]:
+    """Navegação GPS do sincronizador + GLONASS (.yyg / _RN) da mesma pasta.
+
+    O sincronizador RBMC só lista navegação GPS; os arquivos GLONASS vêm no
+    mesmo pacote e ficam ao lado do .yyn.
+    """
+    paths = [str(x) for x in (state.get("navigation_files") or [])]
+    folders = {Path(p).parent for p in paths}
+    obs = state.get("best_observation_file")
+    if obs:
+        folders.add(Path(str(obs)).parent)
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        for f in sorted(folder.iterdir()):
+            if f.is_file() and str(f) not in paths and _glonass_nav_files([str(f)]):
+                paths.append(str(f))
+    return paths
 
 
 def _master_from_reader(data: dict, marker_xyz, code: str) -> dict:

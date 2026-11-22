@@ -492,9 +492,11 @@ def run_case(job_id, target_code, base_codes, date, start_local, minutes, keep=F
         from app.services.vrs_unified.glonass_nav import (
             glonass_channels, glonass_positions, merge_glonass_nav,
         )
-        from app.services.vrs_unified.unified_service import _glonass_nav_files
+        from app.services.vrs_unified.unified_service import (
+            _glonass_nav_files, station_navigation_files,
+        )
 
-        files = _glonass_nav_files([str(x) for x in (state.get("navigation_files") or [])])
+        files = _glonass_nav_files(station_navigation_files(state))
         records = merge_glonass_nav(files) if files else {}
         channels = glonass_channels(records)
         vrs_r = sum(1 for ep in vrs_epochs.values() for s_ in ep if s_.startswith("R"))
