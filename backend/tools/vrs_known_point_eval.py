@@ -40,6 +40,11 @@ IF_B = F2**2 / (F1**2 - F2**2)
 WGS_A = 6378137.0
 WGS_E2 = 6.69437999014e-3
 LOCAL_TZ = ZoneInfo("America/Belem")
+# salto na taxa centrada da fase livre da ionosfera (m) tratado como perda de ciclo;
+# 1 ciclo em L1 vira ~0,48 m na combinação, então 0,10 m pega saltos pequenos
+SLIP_IF_RATE_M = 0.10
+# salto na segunda diferença da combinação geometry-free (m) entre épocas
+GF_SLIP_M = 0.05
 
 
 def ecef_to_geodetic(x, y, z):
@@ -191,7 +196,7 @@ def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_ele
             mean_rate = sum(x[1] for x in rates) / len(rates)
             for sat, rate in rates:
                 centered = rate - mean_rate
-                if abs(centered) > 1.0:
+                if abs(centered) > SLIP_IF_RATE_M:
                     slips += 1
                     slip_marks.add((key, sat))
                     drift[sat] = 0.0
@@ -224,6 +229,16 @@ def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_ele
     if pb:
         result["phase_bias_enu_m"] = [round(dot(pb["dx"], ax), 3) for ax in (e_ax, n_ax, u_ax)]
         result["phase_bias_rms_cm"] = pb["rms_cm"]
+        if pb.get("cov"):
+            q = pb["cov"]
+            result["phase_bias_sigma_enu_m"] = [
+                round(math.sqrt(max(0.0, sum(ax[i] * q[i][j] * ax[j]
+                                             for i in range(3) for j in range(3)))), 3)
+                for ax in (e_ax, n_ax, u_ax)
+            ]
+    common_keys = sorted(set(vrs_epochs) & set(real_epochs))
+    result["gf_slips_vrs"] = gf_slip_count(vrs_epochs, common_keys)
+    result["gf_slips_real"] = gf_slip_count(real_epochs, common_keys)
     if phase_rates:
         result["phase_rate_rms_cm"] = round(
             100 * math.sqrt(sum(r * r for r in phase_rates) / len(phase_rates)), 2
@@ -280,7 +295,49 @@ def phase_position_bias(rows, slip_marks, key_order, iterations=30):
         return None
     res = [r[2] - sum(r[3 + i] * dx[i] for i in range(3)) for r in data]
     rms = math.sqrt(sum(x * x for x in res) / len(res))
-    return {"dx": dx, "rms_cm": round(rms * 100, 2)}
+    return {"dx": dx, "rms_cm": round(rms * 100, 2), "cov": _cov3(ata, rms)}
+
+
+def _cov3(ata, sigma):
+    m = ata
+    det = (m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+           - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+           + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]))
+    if abs(det) < 1e-18:
+        return None
+    inv = [[0.0] * 3 for _ in range(3)]
+    for i in range(3):
+        for j in range(3):
+            r = [k for k in range(3) if k != j]
+            c = [k for k in range(3) if k != i]
+            minor = m[r[0]][c[0]] * m[r[1]][c[1]] - m[r[0]][c[1]] * m[r[1]][c[0]]
+            inv[i][j] = ((-1) ** (i + j)) * minor / det
+    return [[inv[i][j] * sigma * sigma for j in range(3)] for i in range(3)]
+
+
+def gf_slip_count(epochs: dict, keys) -> int:
+    """Conta saltos na combinação geometry-free (L1·λ1 − L2·λ2) de um receptor."""
+    hist: dict[str, list] = {}
+    slips = 0
+    for k in keys:
+        for sat, obs in (epochs.get(k) or {}).items():
+            if not sat.startswith("G") or not obs.get("L1") or not obs.get("L2"):
+                hist.pop(sat, None)
+                continue
+            gf = obs["L1"] * L1_WL - obs["L2"] * L2_WL
+            h = hist.setdefault(sat, [])
+            h.append(gf)
+            if len(h) >= 3:
+                second = h[-1] - 2 * h[-2] + h[-3]
+                if abs(second) > GF_SLIP_M:
+                    slips += 1
+                    hist[sat] = [gf]
+                else:
+                    del h[0]
+        for sat in list(hist):
+            if sat not in (epochs.get(k) or {}):
+                hist.pop(sat)
+    return slips
 
 
 def run_case(job_id, target_code, base_codes, date, start_local, minutes, keep=False,
