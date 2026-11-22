@@ -101,6 +101,12 @@ def build_unified_export_zip(results: Path) -> tuple[bytes, str] | None:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.write(rinex, arcname=rinex.name)
+        for nav in summary.get("navigation_files") or []:
+            nav_path = Path(nav)
+            if not nav_path.is_file():
+                nav_path = results / nav_path.name
+            if nav_path.is_file():
+                zf.write(nav_path, arcname=nav_path.name)
         zf.write(summary_path, arcname="relatorios/resumo_processamento.json")
     return buffer.getvalue(), rinex.name
 

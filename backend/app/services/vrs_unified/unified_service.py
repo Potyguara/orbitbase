@@ -217,6 +217,7 @@ def _load_station_epochs(code: str, session_date: str, start_utc: datetime, end_
     path = Path(convert_hatanaka_to_rinex(str(obs)))
     data = extract_rinex_observations_for_window(path, start_utc, end_utc)
     data["nav_path"] = state.get("best_navigation_file")
+    data["nav_paths"] = [str(x) for x in (state.get("navigation_files") or [])]
     return data
 
 
@@ -303,6 +304,7 @@ def build_master_transport_epochs(
             "master_quality_ratio": round(ratio, 3),
             "stations_skipped": tried,
             "nav_path": str(data["nav_path"]),
+            "nav_paths": data.get("nav_paths") or [str(data["nav_path"])],
             "requested_epochs": len(grid),
         }
         return epochs, skipped, info
@@ -414,6 +416,50 @@ def process_unified_vrs(
     )
 
 
+_NAV_LETTERS = {"n": "GPS", "g": "GLONASS", "l": "Galileo", "f": "BeiDou", "p": "misto"}
+
+
+def nav_kind(path: str) -> str | None:
+    """Letra RINEX 2 da navegação (n, g, l, f, p) a partir do nome do arquivo."""
+    name = Path(path).name.lower()
+    for suffix in (".gz", ".z", ".zip"):
+        if name.endswith(suffix):
+            return None
+    if name.endswith("_gn.rnx"):
+        return "n"
+    if name.endswith("_rn.rnx"):
+        return "g"
+    if name.endswith("_mn.rnx"):
+        return "p"
+    last = name[-1:]
+    if len(name) > 4 and name[-4] == "." and name[-3:-1].isdigit() and last in _NAV_LETTERS:
+        return last
+    return None
+
+
+def _copy_navigation_files(results_dir: Path, rinex_name: str, nav_paths: list) -> list[str]:
+    """Copia as efemérides transmitidas reais da RBMC do dia com o nome da base.
+
+    São os arquivos de navegação originais (não alterados) da estação usada,
+    renomeados para acompanhar o RINEX de observação (ex.: BASE2320.26n).
+    """
+    out = []
+    seen = set()
+    stem = rinex_name[:-1]
+    for raw in nav_paths:
+        if not raw:
+            continue
+        src = Path(raw)
+        kind = nav_kind(str(src))
+        if not src.is_file() or kind is None or kind in seen:
+            continue
+        dst = results_dir / f"{stem}{kind}"
+        shutil.copy2(src, dst)
+        seen.add(kind)
+        out.append(str(dst))
+    return out
+
+
 def _finish_unified(
     job, results_dir: Path, epochs, skipped, target_xyz, start_local, end_local,
     start_utc, end_utc, step_seconds, extra: dict,
@@ -440,8 +486,12 @@ def _finish_unified(
         output_systems=["G"],
         forced_obs_types=["C1", "P1", "L1", "C2", "P2", "L2"],
     )
+    nav_outputs = _copy_navigation_files(
+        results_dir, rinex_name, extra.get("nav_paths") or [extra.get("nav_path")]
+    )
     summary = {
         "engine": "unified_v1",
+        "navigation_files": nav_outputs,
         "step_seconds": step_seconds,
         "window_local": [start_local.isoformat(), end_local.isoformat()],
         "window_utc": [_epoch_to_iso(start_utc), _epoch_to_iso(end_utc)],

@@ -89,3 +89,35 @@ def test_short_occupation_gets_wide_basic_window():
     s, e = _padded_basic_window(parse_local_time("2026-08-20", "00:01:00"),
                                 parse_local_time("2026-08-20", "00:03:00"))
     assert s == "00:00" and e >= "01:00"
+
+
+def test_nav_kind_and_zip_includes_navigation(tmp_path):
+    import json
+    import zipfile
+    import io
+
+    from app.routers.vrs_unified import build_unified_export_zip
+    from app.services.vrs_unified.unified_service import _copy_navigation_files, nav_kind
+
+    assert nav_kind("/x/apma2320.26n") == "n"
+    assert nav_kind("/x/apma2320.26g") == "g"
+    assert nav_kind("/x/APMA00BRA_R_20262320000_01D_GN.rnx") == "n"
+    assert nav_kind("/x/apma2320.26o") is None
+    assert nav_kind("/x/apma2320.26n.gz") is None
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "apma2320.26n").write_text("gps nav")
+    (src / "apma2320.26g").write_text("glo nav")
+    results = tmp_path / "results"
+    results.mkdir()
+    navs = _copy_navigation_files(results, "BASE2320.26o",
+                                  [str(src / "apma2320.26n"), str(src / "apma2320.26g")])
+    assert sorted(p.split("/")[-1] for p in navs) == ["BASE2320.26g", "BASE2320.26n"]
+
+    (results / "BASE2320.26o").write_text("obs")
+    (results / "unified_summary.json").write_text(json.dumps({
+        "rinex_path": str(results / "BASE2320.26o"), "navigation_files": navs}))
+    payload, _ = build_unified_export_zip(results)
+    names = zipfile.ZipFile(io.BytesIO(payload)).namelist()
+    assert {"BASE2320.26o", "BASE2320.26n", "BASE2320.26g"} <= set(names)
