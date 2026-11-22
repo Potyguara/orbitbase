@@ -205,9 +205,9 @@ function setCurrentMode(mode) {
 }
 
 function getDashboardUrlByMode(mode) {
-  return mode === "advanced"
-    ? "./dashboard_advanced.html"
-    : "./dashboard.html";
+  // Interface única: o login sempre leva ao painel principal. As telas
+  // clássica (classic/dashboard.html) e avançada ficam acessíveis por URL.
+  return "./dashboard.html";
 }
 
 function isAdvancedDashboardPage() {

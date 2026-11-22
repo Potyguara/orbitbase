@@ -127,3 +127,162 @@ def export_unified(
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="job_{job_id}_base.zip"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# Interface única: status e downloads separados (RINEX / RBMC / EFEMÉRIDES)
+# ---------------------------------------------------------------------------
+
+
+def _read_summary(job_id: int) -> dict | None:
+    path = unified_root(STORAGE_ROOT, job_id) / "results" / "unified_summary.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _local_file(results: Path, raw: str | None) -> Path | None:
+    if not raw:
+        return None
+    path = Path(raw)
+    if path.is_file():
+        return path
+    alt = results / path.name
+    return alt if alt.is_file() else None
+
+
+@router.get("/unified/status")
+def unified_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Resumo do motor único para todos os jobs do usuário (para a tabela)."""
+    jobs = db.query(VRSJob.id).filter(VRSJob.user_id == current_user.id).all()
+    out = {}
+    for (job_id,) in jobs:
+        summary = _read_summary(job_id)
+        results = unified_root(STORAGE_ROOT, job_id) / "results"
+        progress = None
+        try:
+            progress = json.loads((results / "progress.json").read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        ready = bool(summary and _local_file(results, summary.get("rinex_path")))
+        out[str(job_id)] = {
+            "ready": ready,
+            "status": (progress or {}).get("status"),
+            "percent": (progress or {}).get("percent"),
+            "message": (progress or {}).get("message"),
+            "step_seconds": (summary or {}).get("step_seconds"),
+            "epochs_written": (summary or {}).get("epochs_written"),
+            "master_station": (summary or {}).get("master_station"),
+            "master_distance_km": (summary or {}).get("master_distance_km"),
+            "window_local": (summary or {}).get("window_local"),
+            "rinex_name": Path((summary or {}).get("rinex_path") or "").name or None,
+        }
+    return {"jobs": out}
+
+
+def _zip_response(files: list[tuple[Path, str]], filename: str) -> StreamingResponse:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path, arcname in files:
+            zf.write(path, arcname=arcname)
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{job_id}/download/rinex")
+def download_rinex(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_job(db, job_id, current_user)
+    results = unified_root(STORAGE_ROOT, job_id) / "results"
+    summary = _read_summary(job_id)
+    rinex = _local_file(results, (summary or {}).get("rinex_path"))
+    if rinex is None:
+        raise HTTPException(status_code=404, detail="Processe o job primeiro.")
+    return StreamingResponse(
+        open(rinex, "rb"),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{rinex.name}"'},
+    )
+
+
+def collect_ephemeris_files(results: Path, summary: dict) -> list[tuple[Path, str]]:
+    files = []
+    for raw in summary.get("navigation_files") or []:
+        path = _local_file(results, raw)
+        if path:
+            files.append((path, path.name))
+    if not files:
+        # processamentos antigos: usa a navegação original da base mestra
+        for raw in summary.get("nav_paths") or [summary.get("nav_path")]:
+            path = _local_file(results, raw)
+            if path:
+                files.append((path, path.name))
+    return files
+
+
+@router.get("/{job_id}/download/ephemeris")
+def download_ephemeris(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_job(db, job_id, current_user)
+    results = unified_root(STORAGE_ROOT, job_id) / "results"
+    summary = _read_summary(job_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Processe o job primeiro.")
+    files = collect_ephemeris_files(results, summary)
+    if not files:
+        raise HTTPException(status_code=404, detail="Nenhum arquivo de efemérides encontrado.")
+    return _zip_response(files, f"job_{job_id}_efemerides.zip")
+
+
+def collect_rbmc_files(station_codes: list[str], session_date: str) -> list[tuple[Path, str]]:
+    from app.services.rbmc_observation_sync_service import _find_station_files
+
+    files: list[tuple[Path, str]] = []
+    for code in station_codes:
+        try:
+            state = _find_station_files(code, session_date)
+        except Exception:
+            continue
+        for key in ("best_observation_file", "best_navigation_file"):
+            raw = state.get(key)
+            if raw and Path(raw).is_file():
+                files.append((Path(raw), f"{code.upper()}/{Path(raw).name}"))
+    return files
+
+
+@router.get("/{job_id}/download/rbmc")
+def download_rbmc(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    job = _get_job(db, job_id, current_user)
+    summary = _read_summary(job_id) or {}
+    used = [c.upper() for c in summary.get("stations_used") or []]
+    if summary.get("master_station") and summary["master_station"].upper() not in used:
+        used.insert(0, summary["master_station"].upper())
+    try:
+        selected = [c.upper() for c in json.loads(job.selected_station_codes_json or "[]")]
+    except Exception:
+        selected = []
+    codes = used + [c for c in selected if c not in used]
+    files = collect_rbmc_files(codes, job.session_date)
+    if not files:
+        raise HTTPException(status_code=404, detail="Nenhum arquivo RBMC encontrado para este job.")
+    return _zip_response(files, f"job_{job_id}_rbmc.zip")

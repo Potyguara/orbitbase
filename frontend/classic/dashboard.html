@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <base href="../" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OrbitBase | Dashboard clássico (backup)</title>
+
+  <link rel="stylesheet" href="./styles.css?v=504" />
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body class="dashboard-body">
+
+  <header class="topbar">
+    
+    <div class="container topbar-inner">
+      <div class="brand">
+        <div class="brand-mark">O</div>
+        <div>
+          <h1>OrbitBase</h1>
+          <p>N. S. de Lima - Biome Projetos Ambientais</p>
+        </div>
+        <a class="btn btn-outline" href="./dashboard_advanced.html">Modo avançado</a>
+      </div>
+
+
+      <nav class="nav">
+        <span id="user-name-nav" class="user-pill">Carregando...</span>
+        <button id="logout-btn" class="btn btn-outline" type="button">Sair</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="section muted">
+    <div class="container dashboard-shell">
+
+      <div class="dashboard-grid dashboard-grid-top">
+        <section class="dashboard-card info-card">
+          <span class="eyebrow">Conta</span>
+          <h2>Bem-vindo ao OrbitBase</h2>
+
+          <div class="info-list">
+            <div class="info-item">
+              <span class="info-label">Nome</span>
+              <strong id="user-name">--</strong>
+            </div>
+            <div class="info-item">
+              <span class="info-label">E-mail</span>
+              <strong id="user-email">--</strong>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Plano</span>
+              <strong id="user-plan">--</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="dashboard-card info-card">
+          <span class="eyebrow">Consumo mensal</span>
+          <h3>Uso atual</h3>
+
+          <div class="stats-grid">
+            <div class="stat-box">
+              <span class="stat-label">Mês</span>
+              <strong id="usage-month">--</strong>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">Min. incluídos</span>
+              <strong id="included-minutes">--</strong>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">Min. usados</span>
+              <strong id="used-minutes">--</strong>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">Exp. incluídas</span>
+              <strong id="included-exports">--</strong>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">Exp. usadas</span>
+              <strong id="used-exports">--</strong>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="dashboard-card dashboard-card-full">
+        <div class="dashboard-head">
+          <div>
+            <span class="eyebrow">Visualização</span>
+            <h3>Rede GNSS, RBMC e posição VRS</h3>
+            <p class="section-subtitle">
+              Mostre o alvo no mapa e selecione as estações RBMC mais próximas para montar a rede.
+            </p>
+          </div>
+        </div>
+
+        <div class="dashboard-head-actions">
+          <button
+            id="sync-rbmc-btn"
+            type="button"
+            class="btn btn-secondary"
+            title="Atualiza automaticamente a lista de estações RBMC no banco"
+          >
+            Atualizar estações RBMC
+          </button>
+        </div>
+
+        <div class="map-shell">
+          <div id="network-map"></div>
+        </div>
+
+        <div class="map-legend">
+          <span><strong>Azul</strong>: estação RBMC selecionada</span>
+          <span><strong>Verde</strong>: estação RBMC ativa</span>
+          <span><strong>Vermelho</strong>: posição alvo VRS do job</span>
+        </div>
+      </section>
+
+      <div id="rbmc-sync-message" class="message-box hidden"></div>
+
+      <section class="dashboard-card dashboard-card-full">
+        <div class="dashboard-head">
+          <div>
+            <span class="eyebrow">Rede VRS</span>
+            <h3>Gerar base virtual</h3>
+            <p class="section-subtitle">
+              Defina o alvo, visualize no mapa e selecione as estações RBMC que serão usadas no processamento.
+            </p>
+          </div>
+        </div>
+
+        <form id="job-form" class="form-card">
+          <input type="hidden" id="editing-job-id" value="" />
+
+          <div class="form-section-title">Identificação do job</div>
+          <div class="form-grid">
+            <div class="form-field form-field-full">
+              <label for="job-name">Nome do job</label>
+              <input
+                id="job-name"
+                type="text"
+                placeholder="Ex.: Rede Santana 12-04-2026"
+                required
+              />
+            </div>
+          </div>
+
+          <div class="form-section-title">Coordenadas da VRS</div>
+          <div class="form-grid">
+            <div class="form-field">
+              <label for="target-lat">Latitude VRS</label>
+              <input
+                id="target-lat"
+                type="number"
+                step="any"
+                placeholder="Ex.: 0.0345"
+                required
+              />
+            </div>
+
+            <div class="form-field">
+              <label for="target-lon">Longitude VRS</label>
+              <input
+                id="target-lon"
+                type="number"
+                step="any"
+                placeholder="Ex.: -51.0678"
+                required
+              />
+            </div>
+
+            <div class="form-field">
+              <label for="target-height">Altitude VRS (m)</label>
+              <input
+                id="target-height"
+                type="number"
+                step="any"
+                placeholder="Ex.: 12.45"
+                required
+              />
+            </div>
+
+            <div class="form-field">
+              <label>&nbsp;</label>
+              <button
+                id="preview-target-btn"
+                type="button"
+                class="btn btn-secondary btn-full"
+              >
+                Mostrar alvo no mapa
+              </button>
+            </div>
+
+            <div class="form-field">
+              <label for="output-rinex-name">Nome do arquivo RINEX final</label>
+              <input
+                id="output-rinex-name"
+                type="text"
+                placeholder="Ex.: BASE_VIRTUAL_PONTO_01"
+              />
+            </div>
+
+            <div class="form-field">
+              <label for="output-marker-name">Marker name do RINEX</label>
+              <input
+                id="output-marker-name"
+                type="text"
+                placeholder="Ex.: PONTO_VRS_01"
+              />
+            </div>
+          </div>
+
+          <div class="form-section-title">Janela temporal</div>
+          <div class="form-grid">
+            <div class="form-field">
+              <label for="session-date">Data da sessão</label>
+              <input id="session-date" type="date" required />
+            </div>
+
+            <div class="form-field">
+              <label for="start-time">Hora inicial</label>
+              <input id="start-time" type="time" required />
+            </div>
+
+            <div class="form-field">
+              <label for="end-time">Hora final</label>
+              <input id="end-time" type="time" required />
+            </div>
+
+            <div class="form-field">
+              <label for="occupation-minutes">Tempo de ocupação (min)</label>
+              <input
+                id="occupation-minutes"
+                type="number"
+                min="1"
+                placeholder="Automático"
+                readonly
+              />
+            </div>
+
+            <div class="form-field">
+              <label for="job-minutes">Minutos do processamento</label>
+              <input
+                id="job-minutes"
+                type="number"
+                min="1"
+                max="1440"
+                placeholder="Automático"
+                readonly
+              />
+            </div>
+
+            <div class="form-field">
+              <label for="job-notes">Observações</label>
+              <input
+                id="job-notes"
+                type="text"
+                placeholder="Ex.: teste de geração VRS"
+              />
+            </div>
+          </div>
+
+          <div class="form-section-title">Estações RBMC selecionadas</div>
+          <div class="form-grid">
+            <div class="form-field form-field-full">
+              <div id="selected-stations-summary" class="message-box">
+                Nenhuma estação RBMC selecionada.
+              </div>
+            </div>
+          </div>
+
+          <div class="job-actions job-actions-inline">
+            <button
+              id="clear-selected-stations-btn"
+              type="button"
+              class="btn btn-outline"
+            >
+              Limpar seleção de estações
+            </button>
+
+            <button id="job-submit-btn" type="submit" class="btn btn-primary">
+              Criar job
+            </button>
+
+            <button
+              id="job-cancel-edit-btn"
+              type="button"
+              class="btn btn-outline hidden"
+            >
+              Cancelar edição
+            </button>
+          </div>
+        </form>
+
+        <div id="job-message" class="message-box hidden"></div>
+
+        <div class="dashboard-head dashboard-head-table">
+          <div>
+            <span class="eyebrow">Controle</span>
+            <h3>Jobs criados</h3>
+            <p class="section-subtitle">
+              Fluxo recomendado: visualizar alvo → selecionar estações → criar job → processar → exportar.
+            </p>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="jobs-table jobs-table-clean">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Nome do job</th>
+                <th>Estações RBMC</th>
+                <th>Período</th>
+                <th>Progresso</th>
+                <th>Status</th>
+                <th>Min. gerados</th>
+                <th>Exportações</th>
+                <th class="th-actions">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="jobs-table-body">
+              <tr>
+                <td colspan="9">Carregando jobs...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <div id="vrsConfigModal" class="vrs-modal hidden">
+    <div class="vrs-modal-backdrop" id="vrsConfigBackdrop"></div>
+
+    <div class="vrs-modal-content">
+      <div class="vrs-modal-header">
+        <h2>Configurações VRS</h2>
+        <button id="closeVrsConfigBtn" class="vrs-close-btn" type="button">×</button>
+      </div>
+
+      <div class="vrs-modal-body">
+        <div class="vrs-grid">
+          <div class="vrs-card">
+            <h3>Perfil ativo</h3>
+            <div id="activeVrsProfileInfo" class="vrs-muted">
+              Carregando perfil ativo...
+            </div>
+          </div>
+
+          <div class="vrs-card">
+            <h3>Perfis salvos</h3>
+            <select id="vrsProfilesSelect" class="vrs-input"></select>
+            <div class="vrs-actions-row">
+              <button id="refreshVrsProfilesBtn" type="button" class="btn btn-secondary">
+                Atualizar lista
+              </button>
+              <button id="activateSelectedProfileBtn" type="button" class="btn btn-primary">
+                Ativar perfil
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="vrs-card">
+          <h3>Editar / criar perfil</h3>
+
+          <div class="vrs-form-grid">
+            <div>
+              <label>Nome do perfil</label>
+              <input id="vrsProfileName" class="vrs-input" type="text" placeholder="Ex.: Conservador PPP" />
+            </div>
+
+            <div>
+              <label>Descrição</label>
+              <input id="vrsProfileDescription" class="vrs-input" type="text" placeholder="Perfil voltado a melhor estabilidade PPP" />
+            </div>
+
+            <div>
+              <label>Min. bases por observação</label>
+              <input id="cfgMinBasesPerObservation" class="vrs-input" type="number" min="1" />
+            </div>
+
+            <div>
+              <label>Min. satélites por época</label>
+              <input id="cfgMinSatellitesPerEpoch" class="vrs-input" type="number" min="1" />
+            </div>
+
+            <div>
+              <label>Máx. satélites por época</label>
+              <input id="cfgMaxSatellitesPerEpoch" class="vrs-input" type="number" min="1" />
+            </div>
+
+            <div>
+              <label>Min. presença satélite</label>
+              <input id="cfgMinSatellitePresenceRatio" class="vrs-input" type="number" step="0.01" min="0" max="1" />
+            </div>
+
+            <div>
+              <label>Min. maior arco satélite</label>
+              <input id="cfgMinSatelliteLongestArc" class="vrs-input" type="number" min="1" />
+            </div>
+
+            <div>
+              <label>Janela continuidade local</label>
+              <input id="cfgLocalContinuityWindow" class="vrs-input" type="number" min="0" />
+            </div>
+
+            <div>
+              <label>Min. válidos na janela local</label>
+              <input id="cfgMinValidInLocalWindow" class="vrs-input" type="number" min="1" />
+            </div>
+
+            <div class="vrs-checkbox-group">
+              <label><input id="cfgPreferNearestBase" type="checkbox" /> Preferir base mais próxima</label>
+            </div>
+
+            <div class="vrs-checkbox-group">
+              <label><input id="cfgStrongNearestBaseBias" type="checkbox" /> Reforçar peso da base mais próxima</label>
+            </div>
+
+            <div class="vrs-checkbox-group">
+              <label><input id="cfgRequireDualFrequency" type="checkbox" /> Exigir dupla frequência</label>
+            </div>
+
+            <div class="vrs-checkbox-group">
+              <label><input id="cfgPreserveFullUserWindow" type="checkbox" /> Preservar janela completa do usuário</label>
+            </div>
+
+            <div class="vrs-checkbox-group">
+              <label><input id="cfgGeneratePppAuxFile" type="checkbox" /> Gerar arquivo auxiliar PPP</label>
+            </div>
+
+            <div>
+              <label>Observáveis prioritárias</label>
+              <input id="cfgPriorityObs" class="vrs-input" type="text" placeholder="P1,C1,L1,P2,C2,L2,C5,S1,S2,S5" />
+            </div>
+          </div>
+        </div>
+
+        <div class="vrs-card">
+          <h3>Estratégias PPP</h3>
+          <table class="vrs-table">
+            <thead>
+              <tr>
+                <th>Estratégia</th>
+                <th>Min. épocas</th>
+                <th>Min. sat/época</th>
+                <th>Min. obs prioritárias/sat</th>
+                <th>Max gap</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><input id="trial1Strategy" class="vrs-input" type="text" /></td>
+                <td><input id="trial1MinConsecutiveEpochs" class="vrs-input" type="number" /></td>
+                <td><input id="trial1MinSatellitesPerEpoch" class="vrs-input" type="number" /></td>
+                <td><input id="trial1MinPriorityObs" class="vrs-input" type="number" step="0.1" /></td>
+                <td><input id="trial1MaxGapFactor" class="vrs-input" type="number" step="0.1" /></td>
+              </tr>
+              <tr>
+                <td><input id="trial2Strategy" class="vrs-input" type="text" /></td>
+                <td><input id="trial2MinConsecutiveEpochs" class="vrs-input" type="number" /></td>
+                <td><input id="trial2MinSatellitesPerEpoch" class="vrs-input" type="number" /></td>
+                <td><input id="trial2MinPriorityObs" class="vrs-input" type="number" step="0.1" /></td>
+                <td><input id="trial2MaxGapFactor" class="vrs-input" type="number" step="0.1" /></td>
+              </tr>
+              <tr>
+                <td><input id="trial3Strategy" class="vrs-input" type="text" /></td>
+                <td><input id="trial3MinConsecutiveEpochs" class="vrs-input" type="number" /></td>
+                <td><input id="trial3MinSatellitesPerEpoch" class="vrs-input" type="number" /></td>
+                <td><input id="trial3MinPriorityObs" class="vrs-input" type="number" step="0.1" /></td>
+                <td><input id="trial3MaxGapFactor" class="vrs-input" type="number" step="0.1" /></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="vrs-actions-row bottom">
+          <button id="newVrsProfileBtn" type="button" class="btn btn-secondary">Novo</button>
+          <button id="saveNewVrsProfileBtn" type="button" class="btn btn-primary">Salvar novo perfil</button>
+          <button id="updateCurrentVrsProfileBtn" type="button" class="btn btn-primary">Atualizar perfil selecionado</button>
+        </div>
+
+        <div id="vrsConfigFeedback" class="vrs-feedback"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="processingModal" class="ob-modal hidden">
+    <div class="ob-modal-backdrop"></div>
+    <div class="ob-modal-panel">
+      <div class="ob-modal-header">
+        <h3>Processando job</h3>
+      </div>
+
+      <div class="ob-modal-body">
+        <div id="processingModalJobName" class="ob-modal-jobname"></div>
+
+        <div class="ob-progress-wrap">
+          <div class="ob-progress-bar">
+            <div id="processingModalBar" class="ob-progress-fill" style="width: 0%;"></div>
+          </div>
+          <div id="processingModalPercent" class="ob-progress-percent">0%</div>
+        </div>
+
+        <div id="processingModalMessage" class="ob-modal-message">
+          Aguardando processamento...
+        </div>
+
+        <div id="processingModalDetail" class="ob-modal-detail"></div>
+      </div>
+
+      <div class="ob-modal-footer">
+        <button
+          id="processingModalCloseBtn"
+          class="btn btn-secondary hidden"
+          type="button"
+        >
+          Fechar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./script.js?v=504"></script>
+</body>
+</html>

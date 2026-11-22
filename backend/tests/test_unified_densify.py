@@ -121,3 +121,27 @@ def test_nav_kind_and_zip_includes_navigation(tmp_path):
     payload, _ = build_unified_export_zip(results)
     names = zipfile.ZipFile(io.BytesIO(payload)).namelist()
     assert {"BASE2320.26o", "BASE2320.26n", "BASE2320.26g"} <= set(names)
+
+
+def test_rbmc_and_ephemeris_collection(tmp_path, monkeypatch):
+    import json
+    from app.routers import vrs_unified as r
+    from app.services import rbmc_observation_sync_service as sync
+
+    obs = tmp_path / "apma2320.26o"
+    nav = tmp_path / "apma2320.26n"
+    obs.write_text("o")
+    nav.write_text("n")
+    monkeypatch.setattr(sync, "_find_station_files", lambda code, date: (
+        {"best_observation_file": str(obs), "best_navigation_file": str(nav)}
+        if code == "APMA" else {"best_observation_file": None, "best_navigation_file": None}))
+    files = r.collect_rbmc_files(["APMA", "BOAV"], "2026-08-20")
+    assert [a for _, a in files] == ["APMA/apma2320.26o", "APMA/apma2320.26n"]
+
+    results = tmp_path / "results"
+    results.mkdir()
+    (results / "BASE2320.26n").write_text("n")
+    eph = r.collect_ephemeris_files(results, {"navigation_files": [str(results / "BASE2320.26n")]})
+    assert [a for _, a in eph] == ["BASE2320.26n"]
+    eph_old = r.collect_ephemeris_files(results, {"nav_path": str(nav)})
+    assert [a for _, a in eph_old] == ["apma2320.26n"]

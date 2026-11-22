@@ -299,6 +299,7 @@ def build_master_transport_epochs(
             min_satellites_per_epoch=4,
         )
         info = {
+            "stations_used": [code],
             "master_station": code,
             "master_distance_km": round(dist_m / 1000, 3),
             "master_quality_ratio": round(ratio, 3),
