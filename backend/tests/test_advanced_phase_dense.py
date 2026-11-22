@@ -152,3 +152,22 @@ def test_tropo_delay_is_sane():
     dz = _slant_tropo_delay(target, zenith)
     assert 2.3 < dz < 2.8
     assert _slant_tropo_delay(target, low) > dz
+
+
+def test_antenna_delta_moves_base_up():
+    from app.services.vrs_advanced.advanced_observation_interpolation_service import (
+        _apply_antenna_delta,
+    )
+    from app.services.vrs_advanced.advanced_rinex_observation_reader_service import (
+        _parse_antenna_delta_hen,
+    )
+
+    line = f"{0.0080:14.4f}{0.0:14.4f}{0.0:14.4f}".ljust(60) + "ANTENNA: DELTA H/E/N"
+    delta = _parse_antenna_delta_hen([line])
+    assert delta == (0.008, 0.0, 0.0)
+
+    marker = (4005474.1188, -4963530.7910, 5200.8584)
+    arp = _apply_antenna_delta(marker, list(delta))
+    _, _, h0 = _geodetic_lat_h(marker)
+    _, _, h1 = _geodetic_lat_h(arp)
+    assert abs((h1 - h0) - 0.008) < 1e-4

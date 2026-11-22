@@ -179,6 +179,26 @@ def _geodetic_lat_h(xyz: tuple[float, float, float]) -> tuple[float, float, floa
     return lat, lon, h
 
 
+def _apply_antenna_delta(
+    marker_xyz: tuple[float, float, float], delta_hen: Any
+) -> tuple[float, float, float]:
+    """Desloca o marco pelo ANTENNA: DELTA H/E/N (altura, leste, norte)."""
+    if not isinstance(delta_hen, (list, tuple)) or len(delta_hen) < 3:
+        return marker_xyz
+    dh = _safe_float(delta_hen[0]) or 0.0
+    de = _safe_float(delta_hen[1]) or 0.0
+    dn = _safe_float(delta_hen[2]) or 0.0
+    if dh == 0.0 and de == 0.0 and dn == 0.0:
+        return marker_xyz
+    lat, lon, _ = _geodetic_lat_h(marker_xyz)
+    up = (cos(lat) * cos(lon), cos(lat) * sin(lon), sin(lat))
+    east = (-sin(lon), cos(lon), 0.0)
+    north = (-sin(lat) * cos(lon), -sin(lat) * sin(lon), cos(lat))
+    return tuple(
+        marker_xyz[i] + dh * up[i] + de * east[i] + dn * north[i] for i in range(3)
+    )  # type: ignore[return-value]
+
+
 def _slant_tropo_delay(receiver_xyz: tuple[float, float, float], sat_xyz: dict) -> float:
     """Atraso troposférico inclinado (m) com atmosfera padrão.
 
@@ -344,6 +364,9 @@ def _normalize_base_epochs(base_numeric_data: list[dict]) -> list[dict]:
                 flush=True,
             )
             continue
+
+        # As observações referem-se ao ARP da antena da base, não ao marco.
+        bx, by, bz = _apply_antenna_delta((bx, by, bz), base.get("antenna_delta_hen"))
 
         epochs_in = base.get("epochs") or []
         epochs_out: list[dict] = []
