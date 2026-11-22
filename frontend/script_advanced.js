@@ -472,7 +472,108 @@ function initAdvancedDashboardPage() {
   });
 }
 
+let unifiedPollingTimer = null;
+
+async function pollUnifiedProgress(jobId) {
+  try {
+    const progress = await apiFetchAdvanced(`/jobs/${jobId}/progress-unified`, {
+      method: "GET",
+      headers: getAuthHeaders(false),
+    });
+    setAdvancedProgress(progress.percent || 0, progress.message || progress.step || "Processando...", "");
+    if (progress.status === "completed" || progress.status === "failed") {
+      clearInterval(unifiedPollingTimer);
+      unifiedPollingTimer = null;
+    }
+  } catch (error) {
+    console.error("Erro ao consultar progresso do motor único:", error);
+  }
+}
+
+async function processUnifiedJob(jobId) {
+  const startTime = document.getElementById("advanced-start-time")?.value.trim();
+  const endTime = document.getElementById("advanced-end-time")?.value.trim();
+  const step = Number(document.getElementById("advanced-step-seconds")?.value || 1);
+  if (!jobId) throw new Error("Informe o ID do job.");
+  if (![1, 5, 10, 15, 30].includes(step)) throw new Error("Intervalo deve ser 1, 5, 10, 15 ou 30 s.");
+
+  const job = await getAdvancedJob(jobId).catch(() => null);
+  const jobDate = job?.session_date ? String(job.session_date).slice(0, 10) : "";
+  const formDate = document.getElementById("advanced-session-date")?.value || "";
+  if (jobDate && formDate && jobDate !== formDate) {
+    throw new Error(`A data informada (${formDate}) é diferente da data do job ${jobId} (${jobDate}).`);
+  }
+
+  clearAdvancedMessage();
+  setAdvancedProgress(2, "Iniciando motor único", "");
+  if (unifiedPollingTimer) clearInterval(unifiedPollingTimer);
+  unifiedPollingTimer = setInterval(() => pollUnifiedProgress(jobId), 3000);
+  try {
+    const data = await apiFetchAdvanced(`/jobs/${jobId}/process-unified`, {
+      method: "POST",
+      headers: getAuthHeaders(true),
+      body: JSON.stringify({ start_time: startTime, end_time: endTime, step_seconds: step }),
+    });
+    const r = data?.result || {};
+    setAdvancedProgress(100, "Base gerada", "");
+    showAdvancedMessage(
+      `Motor único concluído: ${r.epochs_written} épocas a ${r.step_seconds} s ` +
+      `(${r.window_local?.[0]?.slice(11)} a ${r.window_local?.[1]?.slice(11)}). Use "Baixar base do motor único".`
+    );
+  } finally {
+    if (unifiedPollingTimer) clearInterval(unifiedPollingTimer);
+    unifiedPollingTimer = null;
+  }
+}
+
+async function downloadUnifiedFiles(jobId) {
+  const response = await fetch(`${API_BASE}/jobs/${jobId}/export-unified`, {
+    method: "GET",
+    headers: getAuthHeaders(false),
+  });
+  if (!response.ok) {
+    let detail = "Não foi possível baixar a base do motor único.";
+    try {
+      detail = (await response.json())?.detail || detail;
+    } catch (_) {}
+    throw new Error(detail);
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `job_${jobId}_base.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+function bindUnifiedButtons() {
+  const jobIdOf = () => Number(document.getElementById("advanced-job-id")?.value || 0);
+  document.getElementById("unified-process-btn")?.addEventListener("click", async () => {
+    const btn = document.getElementById("unified-process-btn");
+    try {
+      if (btn) btn.disabled = true;
+      await processUnifiedJob(jobIdOf());
+    } catch (error) {
+      showAdvancedMessage(error.message || "Falha no motor único.", true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+  document.getElementById("unified-download-btn")?.addEventListener("click", async () => {
+    try {
+      if (!jobIdOf()) throw new Error("Informe o ID do job para baixar a base.");
+      await downloadUnifiedFiles(jobIdOf());
+    } catch (error) {
+      showAdvancedMessage(error.message || "Falha ao baixar a base.", true);
+    }
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   if (!isAdvancedPage()) return;
   initAdvancedDashboardPage();
+  bindUnifiedButtons();
 });
