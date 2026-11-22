@@ -34,3 +34,25 @@ def test_compare_recovers_position_offset():
     bias = res["code_bias_enu_m"]
     assert math.sqrt(sum(b * b for b in bias)) - math.sqrt(sum(o * o for o in offset)) < 1e-2
     assert res["phase_slips"] == 0
+
+
+def test_phase_position_bias_recovers_offset():
+    import math
+    from tools.vrs_known_point_eval import phase_position_bias
+
+    dx = (0.05, -0.12, 0.30)
+    keys = [f"t{i:04d}" for i in range(240)]
+    rows = []
+    for i, key in enumerate(keys):
+        clock = 3.0 + 0.01 * i
+        for s in range(7):
+            az = 0.9 * s + 0.004 * i
+            el = 0.3 + 0.12 * s + 0.002 * i * (1 if s % 2 else -1)
+            u = (math.cos(el) * math.cos(az), math.cos(el) * math.sin(az), math.sin(el))
+            amb = 10.0 * s + 0.37
+            sd = -(u[0] * dx[0] + u[1] * dx[1] + u[2] * dx[2]) + clock + amb
+            rows.append((key, f"G{s:02d}", sd, u))
+    out = phase_position_bias(rows, set(), keys, iterations=60)
+    assert out is not None
+    for a, b in zip(out["dx"], dx):
+        assert abs(a - b) < 0.01

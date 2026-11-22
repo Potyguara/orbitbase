@@ -143,6 +143,8 @@ def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_ele
     epochs_used = 0
     sats_seen = set()
     key_prev = None
+    phase_rows = []
+    slip_marks = set()
 
     for key in sorted(set(vrs_epochs) & set(real_epochs)):
         geom = sat_cache.get(key) or {}
@@ -165,6 +167,7 @@ def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_ele
                 sd_code.append((sat, pc_v - pc_r - arp_corr, u))
             if lc_v is not None and lc_r is not None:
                 sd_phase.append((sat, lc_v - lc_r - arp_corr))
+                phase_rows.append((key, sat, lc_v - lc_r - arp_corr, u))
             sats_seen.add(sat)
 
         if len(sd_code) >= 4:
@@ -190,6 +193,7 @@ def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_ele
                 centered = rate - mean_rate
                 if abs(centered) > 1.0:
                     slips += 1
+                    slip_marks.add((key, sat))
                     drift[sat] = 0.0
                     continue
                 phase_rates.append(centered)
@@ -216,12 +220,67 @@ def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_ele
         res = [y - sum(a[i] * dx[i] for i in range(3)) for a, y in rows_all]
         result["code_rms_m"] = round(math.sqrt(sum(r * r for r in res) / len(res)), 3)
         result["code_bias_enu_m"] = [round(dot(dx, ax), 3) for ax in (e_ax, n_ax, u_ax)]
+    pb = phase_position_bias(phase_rows, slip_marks, key_order=sorted(set(vrs_epochs) & set(real_epochs)))
+    if pb:
+        result["phase_bias_enu_m"] = [round(dot(pb["dx"], ax), 3) for ax in (e_ax, n_ax, u_ax)]
+        result["phase_bias_rms_cm"] = pb["rms_cm"]
     if phase_rates:
         result["phase_rate_rms_cm"] = round(
             100 * math.sqrt(sum(r * r for r in phase_rates) / len(phase_rates)), 2
         )
     return result
 
+
+
+def phase_position_bias(rows, slip_marks, key_order, iterations=30):
+    """Deslocamento de posição (m, ECEF) que a fase virtual codifica.
+
+    Modelo: sd = -u·dx + relógio(época) + ambiguidade(arco) + ruído. Relógio e
+    ambiguidades são eliminados por projeções alternadas (centragem por época e
+    por arco contínuo); depois resolve dx por mínimos quadrados.
+    """
+    if len(rows) < 20:
+        return None
+    index = {k: i for i, k in enumerate(key_order)}
+    last_seen: dict[str, int] = {}
+    arc_of: dict[str, int] = {}
+    arc_counter = 0
+    data = []
+    for key, sat, sd, u in sorted(rows, key=lambda r: index[r[0]]):
+        i = index[key]
+        if sat not in arc_of or (key, sat) in slip_marks or last_seen.get(sat, -9) != i - 1:
+            arc_counter += 1
+            arc_of[sat] = arc_counter
+        last_seen[sat] = i
+        data.append([key, arc_of[sat], sd, -u[0], -u[1], -u[2]])
+
+    def demean(col_idx, group_idx):
+        sums, counts = {}, {}
+        for r in data:
+            g = r[group_idx]
+            sums[g] = sums.get(g, 0.0) + r[col_idx]
+            counts[g] = counts.get(g, 0) + 1
+        for r in data:
+            r[col_idx] -= sums[r[group_idx]] / counts[r[group_idx]]
+
+    for _ in range(iterations):
+        for c in (2, 3, 4, 5):
+            demean(c, 0)
+            demean(c, 1)
+    ata = [[0.0] * 3 for _ in range(3)]
+    atb = [0.0] * 3
+    for r in data:
+        a = r[3:6]
+        for i in range(3):
+            atb[i] += a[i] * r[2]
+            for j in range(3):
+                ata[i][j] += a[i] * a[j]
+    dx = solve3(ata, atb)
+    if not dx:
+        return None
+    res = [r[2] - sum(r[3 + i] * dx[i] for i in range(3)) for r in data]
+    rms = math.sqrt(sum(x * x for x in res) / len(res))
+    return {"dx": dx, "rms_cm": round(rms * 100, 2)}
 
 
 def run_case(job_id, target_code, base_codes, date, start_local, minutes, keep=False,
