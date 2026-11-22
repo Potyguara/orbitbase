@@ -132,7 +132,21 @@ def solve3(ata, atb):
     return sol
 
 
-def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_elev=10.0):
+def _sat_velocity(sat_cache, key, sat):
+    t = datetime.fromisoformat(key)
+    for step in (1, 15, 30):
+        a = (sat_cache.get((t - timedelta(seconds=step)).isoformat()) or {}).get(sat)
+        b = (sat_cache.get((t + timedelta(seconds=step)).isoformat()) or {}).get(sat)
+        if a and b:
+            return tuple((b[k] - a[k]) / (2 * step) for k in ("x", "y", "z"))
+    return None
+
+
+def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_elev=10.0,
+            clock_rate_corr=True):
+    """clock_rate_corr: remove o efeito do relógio de cada receptor na etiqueta de
+    tempo (-ρ̇·Δδt). A VRS herda o relógio da mestra e a estação real tem o seu;
+    Δδt vem da média por época da diferença de código."""
     lat, lon, _ = ecef_to_geodetic(*marker_xyz)
     e_ax, n_ax, u_ax = enu_basis(lat, lon)
     dh = float(real_header["antenna_delta_hen"][0] or 0.0)
@@ -150,10 +164,12 @@ def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_ele
     key_prev = None
     phase_rows = []
     slip_marks = set()
+    clock_diffs = []
 
     for key in sorted(set(vrs_epochs) & set(real_epochs)):
         geom = sat_cache.get(key) or {}
-        sd_code, sd_phase = [], []
+        sd_code, sd_phase, ep_rows = [], [], []
+        rho_dot = {}
         for sat, v_obs in vrs_epochs[key].items():
             if not sat.startswith("G") or sat not in real_epochs[key] or sat not in geom:
                 continue
@@ -164,6 +180,8 @@ def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_ele
             elev = math.degrees(math.asin(dot(u, u_ax)))
             if elev < min_elev:
                 continue
+            vel = _sat_velocity(sat_cache, key, sat)
+            rho_dot[sat] = dot(u, vel) if vel else 0.0
             pc_v, lc_v = iono_free(v_obs)
             pc_r, lc_r = iono_free(real_epochs[key][sat])
             # obs reais no ARP (marco + dh): distância menor em dh*sin(elev)
@@ -172,8 +190,16 @@ def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_ele
                 sd_code.append((sat, pc_v - pc_r - arp_corr, u))
             if lc_v is not None and lc_r is not None:
                 sd_phase.append((sat, lc_v - lc_r - arp_corr))
-                phase_rows.append((key, sat, lc_v - lc_r - arp_corr, u))
+                ep_rows.append((key, sat, lc_v - lc_r - arp_corr, u))
             sats_seen.add(sat)
+
+        if clock_rate_corr and sd_code:
+            dtd = sum(x[1] for x in sd_code) / len(sd_code) / C
+            clock_diffs.append(dtd)
+            sd_code = [(sat, sd + rho_dot[sat] * dtd, u) for sat, sd, u in sd_code]
+            sd_phase = [(sat, sd + rho_dot[sat] * dtd) for sat, sd in sd_phase]
+            ep_rows = [(k, sat, sd + rho_dot[sat] * dtd, u) for k, sat, sd, u in ep_rows]
+        phase_rows.extend(ep_rows)
 
         if len(sd_code) >= 4:
             epochs_used += 1
@@ -236,6 +262,10 @@ def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_ele
                                              for i in range(3) for j in range(3)))), 3)
                 for ax in (e_ax, n_ax, u_ax)
             ]
+    if clock_diffs:
+        result["clock_diff_us_mean"] = round(1e6 * sum(clock_diffs) / len(clock_diffs), 2)
+        result["clock_diff_us_maxabs"] = round(1e6 * max(abs(x) for x in clock_diffs), 2)
+    result["clock_rate_corr"] = clock_rate_corr
     common_keys = sorted(set(vrs_epochs) & set(real_epochs))
     result["gf_slips_vrs"] = gf_slip_count(vrs_epochs, common_keys)
     result["gf_slips_real"] = gf_slip_count(real_epochs, common_keys)
@@ -440,6 +470,9 @@ def run_case(job_id, target_code, base_codes, date, start_local, minutes, keep=F
     )
     case["vrs_epochs"] = len(vrs_epochs)
     case.update(compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache))
+    raw = compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache,
+                  clock_rate_corr=False)
+    case["phase_bias_enu_m_sem_corr_relogio"] = raw.get("phase_bias_enu_m")
 
     if not keep:
         shutil.rmtree(job_root, ignore_errors=True)
