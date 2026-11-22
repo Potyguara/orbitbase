@@ -80,3 +80,12 @@ def test_time_parsing_and_padding():
     assert (s, e) == ("07:04", "13:28")
     grid = build_target_grid(datetime(2026, 1, 1, 0, 0, 0), datetime(2026, 1, 1, 0, 0, 37), 15)
     assert [g.second for g in grid] == [0, 15, 30, 37]
+
+
+def test_short_occupation_gets_wide_basic_window():
+    s, e = _padded_basic_window(parse_local_time("2026-08-20", "10:00:10"),
+                                parse_local_time("2026-08-20", "10:02:40"))
+    assert (s, e) == ("09:31", "10:32")
+    s, e = _padded_basic_window(parse_local_time("2026-08-20", "00:01:00"),
+                                parse_local_time("2026-08-20", "00:03:00"))
+    assert s == "00:00" and e >= "01:00"

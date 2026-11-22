@@ -39,6 +39,10 @@ LOCAL_TIMEZONE = "America/Belem"
 SUPPORTED_STEPS = (1, 5, 10, 15, 30)
 # margem de épocas nativas antes/depois da janela para interpolar as bordas
 PAD_MINUTES = 1
+# O motor básico filtra satélites por arco mínimo e blocos contínuos; para que
+# qualquer tempo de ocupação funcione (inclusive 1-2 min), ele roda sempre numa
+# janela de pelo menos isto, centrada na pedida, e o resultado é recortado.
+MIN_BASIC_WINDOW_MINUTES = 60
 MAX_GAP_SECONDS = 30.0
 
 
@@ -71,6 +75,17 @@ def build_target_grid(start_utc: datetime, end_utc: datetime, step: int) -> list
 def _padded_basic_window(start_local: datetime, end_local: datetime) -> tuple[str, str]:
     start = start_local.replace(second=0) - timedelta(minutes=PAD_MINUTES)
     end = end_local.replace(second=0) + timedelta(minutes=PAD_MINUTES + 1)
+    missing = MIN_BASIC_WINDOW_MINUTES - (end - start).total_seconds() / 60
+    if missing > 0:
+        half = timedelta(minutes=math.ceil(missing / 2))
+        start, end = start - half, end + half
+    day_start = start_local.replace(hour=0, minute=0, second=0)
+    day_end = start_local.replace(hour=23, minute=59, second=0)
+    if start < day_start:
+        end, start = end + (day_start - start), day_start
+    if end > day_end:
+        start, end = start - (end - day_end), day_end
+    start = max(start, day_start)
     return start.strftime("%H:%M"), end.strftime("%H:%M")
 
 
