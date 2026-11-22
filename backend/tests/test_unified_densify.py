@@ -247,3 +247,26 @@ def test_zipped_rinex_bundles_observation_and_navigation(tmp_path):
     os.utime(rinex, (packed.stat().st_mtime + 5, packed.stat().st_mtime + 5))
     with zipfile.ZipFile(zipped_rinex(rinex)) as zf:
         assert zf.read("BASE2320.26o").startswith(b"B")
+
+
+def test_master_falls_back_when_nearest_station_has_no_file(monkeypatch):
+    from datetime import datetime, timezone
+
+    import app.services.vrs_unified.unified_service as us
+
+    monkeypatch.setattr(us, "_station_xyz_map", lambda codes: {
+        "APMA": (4005474.1, -4963530.8, 5200.9), "APLJ": (3881011.6, -5060683.9, -90889.7)})
+
+    def fake_load(code, *_):
+        if code == "APMA":
+            raise FileNotFoundError("HTTP Error 404")
+        return None
+
+    monkeypatch.setattr(us, "_load_station_epochs", fake_load)
+    start = datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc)
+    try:
+        us.build_master_transport_epochs(["APMA", "APLJ"], "2026-08-19",
+                                         (4005000.0, -4963000.0, 5000.0), start, start, 1)
+    except ValueError as exc:
+        msg = str(exc)
+    assert "APMA" in msg and "sem arquivo RBMC" in msg and "APLJ" in msg

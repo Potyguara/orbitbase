@@ -381,7 +381,12 @@ def build_master_transport_epochs(
     margin = timedelta(minutes=PAD_MINUTES + 1)
     tried = []
     for dist_m, code in ranked:
-        data = _load_station_epochs(code, session_date, start_utc - margin, end_utc + margin)
+        try:
+            data = _load_station_epochs(code, session_date, start_utc - margin, end_utc + margin)
+        except Exception as exc:  # noqa: BLE001 - estação sem arquivo no dia: tenta a próxima
+            tried.append({"station": code, "dist_km": round(dist_m / 1000, 1),
+                          "reason": f"sem arquivo RBMC no dia ({type(exc).__name__})"})
+            continue
         if not data or not data.get("nav_path"):
             tried.append({"station": code, "dist_km": round(dist_m / 1000, 1), "reason": "sem dados"})
             continue
@@ -429,7 +434,8 @@ def build_master_transport_epochs(
             "glonass": glonass,
         }
         return epochs, skipped, info
-    raise ValueError(f"Nenhuma base com dados bons na janela: {tried}")
+    detail = "; ".join(f"{t['station']} ({t['dist_km']} km): {t['reason']}" for t in tried)
+    raise ValueError(f"Nenhuma estação RBMC selecionada tem dados bons nesse dia e horário. {detail}")
 
 
 def unified_root(storage_root: Path, job_id: Any) -> Path:
