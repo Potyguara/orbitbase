@@ -522,7 +522,7 @@ def write_advanced_rinex_from_seed(
     )
     lines.append(
         _header_line(
-            "OrbitBase           BIOME                "
+            "OrbitBase           OrbitBase            "
             + datetime.utcnow().strftime("%d-%b-%y %H:%M").upper(),
             "PGM / RUN BY / DATE",
         )
@@ -534,13 +534,13 @@ def write_advanced_rinex_from_seed(
     )
     lines.append(
         _header_line(
-            f"{'VRSGEN':<20}{receiver_model[:20]:<20}{receiver_version[:20]:<20}",
+            f"{'VRS':<20}{receiver_model[:20]:<20}{receiver_version[:20]:<20}",
             "REC # / TYPE / VERS",
         )
     )
     lines.append(
         _header_line(
-            f"{'VRSANT':<20}{antenna_model[:20]:<20}",
+            f"{'VRS':<20}{antenna_model[:20]:<20}",
             "ANT # / TYPE",
         )
     )
@@ -570,9 +570,9 @@ def write_advanced_rinex_from_seed(
     lines.append(
         _header_line(
             (
-                "Advanced VRS master-phase GPS-only"
+                "VIRTUAL REFERENCE STATION - OrbitBase"
                 if require_phase_observables
-                else "Advanced VRS network-code compact"
+                else "VIRTUAL REFERENCE STATION - OrbitBase"
             ),
             "COMMENT",
         )
