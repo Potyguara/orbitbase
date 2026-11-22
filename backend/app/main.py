@@ -8,7 +8,7 @@ from app.db import Base, engine
 
 from app.routers import auth, jobs, users, vrs_profiles, gnss_stations
 
-from app.routers import vrs_advanced
+from app.routers import vrs_advanced, vrs_unified
 from app.routers import user_advanced_credentials
 
 Base.metadata.create_all(bind=engine)
@@ -68,6 +68,7 @@ app.include_router(vrs_profiles.router)
 app.include_router(gnss_stations.router)
 
 app.include_router(vrs_advanced.router)
+app.include_router(vrs_unified.router)
 app.include_router(user_advanced_credentials.router)
 
 
