@@ -189,6 +189,126 @@ def _write_progress(results_dir: Path, percent: int, step: str, message: str, st
         pass
 
 
+def _station_xyz_map(codes: list[str]) -> dict[str, tuple[float, float, float]]:
+    from app.db import SessionLocal
+    from app.models import GnssStation
+
+    db = SessionLocal()
+    try:
+        rows = db.query(GnssStation).filter(GnssStation.station_code.in_(codes)).all()
+        return {
+            r.station_code.upper(): (r.x, r.y, r.z)
+            for r in rows
+            if r.x is not None and r.y is not None and r.z is not None
+        }
+    finally:
+        db.close()
+
+
+def _load_station_epochs(code: str, session_date: str, start_utc: datetime, end_utc: datetime):
+    """Lê as observações reais da estação RBMC na janela (com margem)."""
+    from app.services.hatanaka_service import convert_hatanaka_to_rinex
+    from app.services.rbmc_observation_sync_service import ensure_rbmc_station_files
+
+    state = ensure_rbmc_station_files(code, session_date) or {}
+    obs = state.get("best_observation_file")
+    if not obs:
+        return None
+    path = Path(convert_hatanaka_to_rinex(str(obs)))
+    data = extract_rinex_observations_for_window(path, start_utc, end_utc)
+    data["nav_path"] = state.get("best_navigation_file")
+    return data
+
+
+def _master_from_reader(data: dict, marker_xyz, code: str) -> dict:
+    from app.services.vrs_advanced.advanced_observation_interpolation_service import (
+        _apply_antenna_delta,
+    )
+
+    epochs = []
+    for ep in data["epochs"]:
+        dt = datetime.fromisoformat(ep["epoch_utc"].replace("Z", "+00:00"))
+        obs_map = {}
+        for item in ep["satellites"]:
+            sat = (item["satellite"] or "").strip().upper()
+            if sat.isdigit():
+                sat = f"G{int(sat):02d}"
+            obs_map[sat] = {k: v for k, v in item["observations"].items() if v}
+        epochs.append({"epoch": dt, "epoch_iso": _epoch_to_iso(dt), "obs_map": obs_map})
+    epochs.sort(key=lambda e: e["epoch"])
+    xyz = _apply_antenna_delta(marker_xyz, data.get("antenna_delta_hen"))
+    return {"station_code": code, "xyz": xyz, "epochs": epochs}
+
+
+def _dual_phase_epoch_ratio(master: dict) -> float:
+    from app.services.vrs_advanced.advanced_observation_interpolation_service import (
+        _obs_has_dual_phase_gps,
+    )
+
+    eps = master.get("epochs") or []
+    if not eps:
+        return 0.0
+    good = sum(
+        1
+        for ep in eps
+        if sum(1 for s, r in ep["obs_map"].items() if s.startswith("G") and _obs_has_dual_phase_gps(r)) >= 4
+    )
+    return good / len(eps)
+
+
+def build_master_transport_epochs(
+    station_codes: list[str],
+    session_date: str,
+    target_xyz: tuple[float, float, float],
+    start_utc: datetime,
+    end_utc: datetime,
+    step_seconds: int,
+    min_quality_ratio: float = 0.8,
+) -> tuple[list[dict], int, dict]:
+    """Transporte geométrico da base mais próxima com dados bons na janela.
+
+    Física: obs_alvo(t) = [obs_mestra - (ρ + T)(mestra)](t interpolado) + (ρ + T)(alvo, t),
+    com ρ corrigido de tempo de propagação e rotação da Terra, T troposfera
+    padrão e a mestra no ARP (ANTENNA: DELTA H/E/N do cabeçalho).
+    """
+    coords = _station_xyz_map([c.upper() for c in station_codes])
+    ranked = sorted(
+        (math.dist(xyz, target_xyz), code) for code, xyz in coords.items()
+    )
+    margin = timedelta(minutes=PAD_MINUTES + 1)
+    tried = []
+    for dist_m, code in ranked:
+        data = _load_station_epochs(code, session_date, start_utc - margin, end_utc + margin)
+        if not data or not data.get("nav_path"):
+            tried.append({"station": code, "dist_km": round(dist_m / 1000, 1), "reason": "sem dados"})
+            continue
+        master = _master_from_reader(data, coords[code], code)
+        ratio = _dual_phase_epoch_ratio(master)
+        if ratio < min_quality_ratio:
+            tried.append({"station": code, "dist_km": round(dist_m / 1000, 1), "reason": f"qualidade {ratio:.2f}"})
+            continue
+        geometry = build_geometry_map(str(data["nav_path"]), start_utc - margin, end_utc + margin)
+        grid = build_target_grid(start_utc, end_utc, step_seconds)
+        epochs, skipped = _build_output_epochs_phase_dense(
+            master_base=master,
+            geometry_epoch_map=geometry,
+            target_xyz=target_xyz,
+            time_grid=grid,
+            max_gap_seconds=MAX_GAP_SECONDS,
+            min_satellites_per_epoch=4,
+        )
+        info = {
+            "master_station": code,
+            "master_distance_km": round(dist_m / 1000, 3),
+            "master_quality_ratio": round(ratio, 3),
+            "stations_skipped": tried,
+            "nav_path": str(data["nav_path"]),
+            "requested_epochs": len(grid),
+        }
+        return epochs, skipped, info
+    raise ValueError(f"Nenhuma base com dados bons na janela: {tried}")
+
+
 def unified_root(storage_root: Path, job_id: Any) -> Path:
     return storage_root / "processing" / f"job_{job_id}_unified"
 
@@ -200,8 +320,13 @@ def process_unified_vrs(
     profile_config: dict | None = None,
     start_time: str | None = None,
     end_time: str | None = None,
+    network_mode: str = "master",
 ) -> dict:
-    """Roda o motor básico com margem e adensa para a janela exata pedida."""
+    """Gera a base VRS na janela exata pedida.
+
+    network_mode="master": transporte geométrico da base mais próxima (padrão).
+    network_mode="basic": correção de rede do motor básico, adensada.
+    """
     from app.services.vrs_processing_service import process_real_vrs
 
     if int(step_seconds) not in SUPPORTED_STEPS:
@@ -216,6 +341,19 @@ def process_unified_vrs(
 
     out_root = unified_root(storage_root, job.id)
     results_dir = out_root / "results"
+    target_xyz = _geodetic_to_ecef(job.target_lat, job.target_lon, job.target_height)
+    codes = json.loads(job.selected_station_codes_json or "[]")
+
+    if network_mode == "master":
+        _write_progress(results_dir, 10, "master", "Selecionando a base mestra mais próxima")
+        epochs, skipped, info = build_master_transport_epochs(
+            codes, job.session_date, target_xyz, start_utc, end_utc, step_seconds
+        )
+        return _finish_unified(
+            job, results_dir, epochs, skipped, target_xyz, start_local, end_local,
+            start_utc, end_utc, step_seconds, {"network_mode": "master", **info},
+        )
+
     _write_progress(results_dir, 5, "basic", "Gerando observações de rede (motor básico)")
 
     pad_start, pad_end = _padded_basic_window(start_local, end_local)
@@ -245,8 +383,6 @@ def process_unified_vrs(
     basic_summary = json.dumps(basic_result, default=str)
 
     _write_progress(results_dir, 70, "geometry", "Calculando geometria dos satélites")
-    target_xyz = _geodetic_to_ecef(job.target_lat, job.target_lon, job.target_height)
-    codes = json.loads(job.selected_station_codes_json or "[]")
     nav_path = _first_nav_file(codes, job.session_date)
     if not nav_path:
         raise ValueError("Nenhum arquivo de navegação disponível nas bases selecionadas.")
@@ -258,13 +394,37 @@ def process_unified_vrs(
     _write_progress(results_dir, 80, "densify", f"Gerando épocas a {step_seconds} s")
     grid = build_target_grid(start_utc, end_utc, step_seconds)
     epochs, skipped = densify_basic_output(basic_rinex, target_xyz, geometry_map, grid)
-    if not epochs:
-        raise ValueError("Nenhuma época válida após o adensamento.")
 
+    basic_root = Path(basic_result.get("job_root") or "")
+    results_dir.mkdir(parents=True, exist_ok=True)
+    if basic_rinex.exists():
+        shutil.copy2(basic_rinex, results_dir / "network_15s.obs")
+    if basic_root.exists():
+        shutil.rmtree(basic_root, ignore_errors=True)
+
+    return _finish_unified(
+        job, results_dir, epochs, skipped, target_xyz, start_local, end_local,
+        start_utc, end_utc, step_seconds,
+        {
+            "network_mode": "basic",
+            "requested_epochs": len(grid),
+            "basic_fallback_to_reference_base": "reference_base_fallback" in basic_summary,
+            "nav_path": nav_path,
+        },
+    )
+
+
+def _finish_unified(
+    job, results_dir: Path, epochs, skipped, target_xyz, start_local, end_local,
+    start_utc, end_utc, step_seconds, extra: dict,
+) -> dict:
+    if not epochs:
+        raise ValueError("Nenhuma época válida na janela pedida.")
+    _write_progress(results_dir, 90, "write", "Gravando RINEX")
     marker = (getattr(job, "output_marker_name", None) or "BASE")[:60]
-    out_name = f"{marker[:4].upper():<4}".replace(" ", "X")
+    code4 = ("".join(ch for ch in marker if ch.isalnum()).upper()[:4] or "BASE").ljust(4, "0")
     doy = start_utc.timetuple().tm_yday
-    rinex_name = f"{out_name}{doy:03d}0.{start_utc.year % 100:02d}o"
+    rinex_name = f"{code4}{doy:03d}0.{start_utc.year % 100:02d}o"
     output_path = write_advanced_rinex_from_seed(
         output_path=str(results_dir / rinex_name),
         advanced_seed={"epochs": epochs},
@@ -280,28 +440,18 @@ def process_unified_vrs(
         output_systems=["G"],
         forced_obs_types=["C1", "P1", "L1", "C2", "P2", "L2"],
     )
-
     summary = {
         "engine": "unified_v1",
         "step_seconds": step_seconds,
         "window_local": [start_local.isoformat(), end_local.isoformat()],
         "window_utc": [_epoch_to_iso(start_utc), _epoch_to_iso(end_utc)],
-        "requested_epochs": len(grid),
         "epochs_written": len(epochs),
         "epochs_skipped": skipped,
-        "basic_fallback_to_reference_base": "reference_base_fallback" in basic_summary,
-        "basic_job_root": basic_result.get("job_root"),
         "rinex_path": output_path,
-        "nav_path": nav_path,
+        **extra,
     }
     (results_dir / "unified_summary.json").write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(summary, indent=2, ensure_ascii=False, default=str), encoding="utf-8"
     )
-    # o motor básico gravou numa pasta própria do proxy; guardamos só o RINEX dele
-    basic_root = Path(basic_result.get("job_root") or "")
-    if basic_root.exists():
-        shutil.copy2(basic_rinex, results_dir / "network_15s.obs")
-        shutil.rmtree(basic_root, ignore_errors=True)
-
     _write_progress(results_dir, 100, "done", "Base gerada", status="completed")
     return summary

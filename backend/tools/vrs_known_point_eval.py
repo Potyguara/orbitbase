@@ -224,7 +224,8 @@ def compare(vrs_epochs, real_epochs, real_header, marker_xyz, sat_cache, min_ele
 
 
 
-def run_case(job_id, target_code, base_codes, date, start_local, minutes, keep=False):
+def run_case(job_id, target_code, base_codes, date, start_local, minutes, keep=False,
+             engine="basic", network_mode="master", step_seconds=15):
     from app.db import SessionLocal
     from app.models import GnssStation
     from app.services.hatanaka_service import convert_hatanaka_to_rinex
@@ -265,18 +266,39 @@ def run_case(job_id, target_code, base_codes, date, start_local, minutes, keep=F
     )
 
     case = {"target": target_code, "minutes": minutes, "start_local": start_local,
+            "engine": engine if engine == "basic" else f"unified-{network_mode}",
             "bases_offered": base_codes}
-    try:
-        result = process_real_vrs(job, profile_config=None)
-    except Exception as exc:  # noqa: BLE001
-        case["error"] = f"{type(exc).__name__}: {exc}"
-        return case
+    storage_root = Path(__file__).resolve().parents[1] / "storage"
+    if engine == "basic":
+        try:
+            result = process_real_vrs(job, profile_config=None)
+        except Exception as exc:  # noqa: BLE001
+            case["error"] = f"{type(exc).__name__}: {exc}"
+            return case
+        job_root = storage_root / "processing" / f"job_{job_id}"
+        vrs_path = job_root / "results" / "base_ppp.obs"
+        if not vrs_path.exists():
+            candidates = sorted((job_root / "results").glob("*.obs"))
+            vrs_path = candidates[0] if candidates else vrs_path
+    else:
+        from app.services.vrs_unified.unified_service import process_unified_vrs, unified_root
 
-    job_root = Path(__file__).resolve().parents[1] / "storage" / "processing" / f"job_{job_id}"
-    vrs_path = job_root / "results" / "base_ppp.obs"
-    if not vrs_path.exists():
-        candidates = sorted((job_root / "results").glob("*.obs"))
-        vrs_path = candidates[0] if candidates else vrs_path
+        job.end_time = end_dt.strftime("%H:%M:%S")
+        job.start_time = start_dt.strftime("%H:%M:%S")
+        try:
+            result = process_unified_vrs(
+                job, storage_root=storage_root, step_seconds=step_seconds,
+                network_mode=network_mode,
+            )
+        except Exception as exc:  # noqa: BLE001
+            case["error"] = f"{type(exc).__name__}: {exc}"
+            shutil.rmtree(unified_root(storage_root, job_id), ignore_errors=True)
+            return case
+        job_root = unified_root(storage_root, job_id)
+        vrs_path = Path(result["rinex_path"])
+        for k in ("master_station", "master_distance_km", "epochs_written", "epochs_skipped"):
+            if k in result:
+                case[k] = result[k]
 
     summary = json.dumps(result, default=str)
     for k in ("ppp_final_source_mode", "master_station", "reference_base"):
@@ -316,6 +338,9 @@ def main(argv=None):
     ap.add_argument("--start", default="08:00", help="Hora local HH:MM")
     ap.add_argument("--minutes", default="5,10,20,60")
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--engine", default="basic", choices=["basic", "unified"])
+    ap.add_argument("--network-mode", default="master", choices=["master", "basic"])
+    ap.add_argument("--step", type=int, default=15)
     ap.add_argument("--out", default=None, help="Arquivo JSON de saída")
     args = ap.parse_args(argv)
 
@@ -326,7 +351,9 @@ def main(argv=None):
     for target in targets:
         network = [b for b in bases if b != target]
         for minutes in [int(m) for m in args.minutes.split(",")]:
-            case = run_case(job_id, target, network, args.date, args.start, minutes, args.keep)
+            case = run_case(job_id, target, network, args.date, args.start, minutes, args.keep,
+                            engine=args.engine, network_mode=args.network_mode,
+                            step_seconds=args.step)
             job_id += 1
             results.append(case)
             print("[EVAL]", json.dumps(case, default=str, ensure_ascii=False), flush=True)
