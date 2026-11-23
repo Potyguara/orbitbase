@@ -270,3 +270,25 @@ def test_master_falls_back_when_nearest_station_has_no_file(monkeypatch):
     except ValueError as exc:
         msg = str(exc)
     assert "APMA" in msg and "sem arquivo RBMC" in msg and "APLJ" in msg
+
+
+def test_receiver_header_choice_goes_to_rinex(tmp_path):
+    from app.services.vrs_advanced.advanced_rinex_writer_service import (
+        write_advanced_rinex_from_seed,
+    )
+    from app.services.vrs_unified.unified_service import receiver_header
+
+    assert receiver_header(None, None)["type"] == "ORBITBASE VRS"
+    rec = receiver_header("Topcon Hiper VR ç", "3487273")
+    assert rec == {"number": "3487273", "type": "TOPCON HIPER VR", "version": "ORBITBASE 1.0"}
+
+    obs = {"C1": 2.1e7, "P1": 2.1e7, "L1": 1.1e8, "C2": 2.1e7, "P2": 2.1e7, "L2": 0.9e8}
+    epochs = [{"epoch": "2026-08-20T11:00:00Z", "observations": [
+        {"satellite": s, **obs} for s in ("G05", "G07", "G12", "G15")]}]
+    out = write_advanced_rinex_from_seed(
+        str(tmp_path / "V.26o"), {"epochs": epochs}, receiver_number=rec["number"],
+        receiver_model=rec["type"], receiver_version=rec["version"],
+        forced_obs_types=["C1", "P1", "L1", "C2", "P2", "L2"])
+    line = [l for l in open(out) if "REC # / TYPE / VERS" in l][0]
+    assert line.startswith("3487273".ljust(20) + "TOPCON HIPER VR".ljust(20) + "ORBITBASE 1.0".ljust(20))
+    assert "VIRTUAL REFERENCE STATION" in open(out).read()

@@ -117,6 +117,33 @@
               <option value="30">30 s</option>
             </select>
           </label>
+          <label class="ob-field">Receptor no RINEX
+            <select id="unified-receiver">
+              <option value="" selected>Padrão (ORBITBASE VRS)</option>
+              <option>TOPCON HIPER VR</option>
+              <option>TOPCON HIPER V</option>
+              <option>TOPCON HIPER SR</option>
+              <option>TOPCON HIPER HR</option>
+              <option>TOPCON GR-5</option>
+              <option>TRIMBLE R12</option>
+              <option>TRIMBLE R10</option>
+              <option>TRIMBLE R8S</option>
+              <option>LEICA GS18</option>
+              <option>LEICA GS16</option>
+              <option>CHC I73</option>
+              <option>CHC I90</option>
+              <option>EMLID REACH RS3</option>
+              <option>EMLID REACH RS2</option>
+              <option>SOUTH GALAXY G1</option>
+              <option>COMNAV T300</option>
+              <option>STONEX S900</option>
+              <option value="__other">Outro…</option>
+            </select>
+            <input id="unified-receiver-other" type="text" maxlength="20" placeholder="Modelo do receptor" class="hidden" />
+          </label>
+          <label class="ob-field">Nº de série do receptor
+            <input id="unified-receiver-number" type="text" maxlength="20" placeholder="Opcional" />
+          </label>
           <label class="ob-field">Duração (min)
             <input id="occupation-minutes" type="number" min="1" placeholder="Automático" readonly />
           </label>
@@ -359,6 +386,6 @@
   </div>
 
   <script src="./script.js?v=505"></script>
-  <script src="./script_unified.js?v=2"></script>
+  <script src="./script_unified.js?v=3"></script>
 </body>
 </html>

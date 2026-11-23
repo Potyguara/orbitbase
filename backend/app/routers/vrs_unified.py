@@ -28,6 +28,8 @@ class UnifiedProcessPayload(BaseModel):
     start_time: str | None = None  # HH:MM ou HH:MM:SS (hora local)
     end_time: str | None = None
     step_seconds: int = Field(default=1, ge=1, le=30)
+    receiver_type: str | None = Field(default=None, max_length=40)
+    receiver_number: str | None = Field(default=None, max_length=40)
 
 
 def _get_job(db: Session, job_id: int, user: User) -> VRSJob:
@@ -56,6 +58,8 @@ def process_job_unified(
             profile_config=profile["config"],
             start_time=payload.start_time,
             end_time=payload.end_time,
+            receiver_type=payload.receiver_type,
+            receiver_number=payload.receiver_number,
         )
     except Exception as exc:  # noqa: BLE001
         results = unified_root(STORAGE_ROOT, job_id) / "results"

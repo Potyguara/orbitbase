@@ -351,6 +351,7 @@ def write_advanced_rinex_from_seed(
     output_systems: list[str] | tuple[str, ...] | set[str] | None = None,
     forced_obs_types: list[str] | None = None,
     phase_systems: tuple[str, ...] = ("G",),
+    receiver_number: str = "VRS",
 ) -> str:
     phase_systems = tuple(str(x).strip().upper() for x in phase_systems)
     path = Path(output_path)
@@ -540,7 +541,7 @@ def write_advanced_rinex_from_seed(
     )
     lines.append(
         _header_line(
-            f"{'VRS':<20}{receiver_model[:20]:<20}{receiver_version[:20]:<20}",
+            f"{receiver_number[:20]:<20}{receiver_model[:20]:<20}{receiver_version[:20]:<20}",
             "REC # / TYPE / VERS",
         )
     )

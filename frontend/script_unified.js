@@ -221,6 +221,43 @@
     } catch (_) {}
   }
 
+  // receptor gravado em REC # / TYPE / VERS do RINEX (lembrado neste navegador)
+  function receiverChoice() {
+    const sel = document.getElementById("unified-receiver");
+    const other = document.getElementById("unified-receiver-other");
+    const num = document.getElementById("unified-receiver-number");
+    let type = sel ? sel.value : "";
+    if (type === "__other") type = (other?.value || "").trim();
+    return { type: type || null, number: (num?.value || "").trim() || null };
+  }
+
+  function setupReceiverField() {
+    const sel = document.getElementById("unified-receiver");
+    const other = document.getElementById("unified-receiver-other");
+    const num = document.getElementById("unified-receiver-number");
+    if (!sel) return;
+    const store = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
+    const load = (k) => { try { return localStorage.getItem(k) || ""; } catch (_) { return ""; } };
+    const saved = load("ob_receiver_type");
+    if (saved) {
+      const known = Array.from(sel.options).some((o) => o.value === saved || o.text === saved);
+      if (known) sel.value = saved; else { sel.value = "__other"; if (other) other.value = saved; }
+    }
+    if (num) num.value = load("ob_receiver_number");
+    const sync = () => {
+      if (other) other.classList.toggle("hidden", sel.value !== "__other");
+      const c = receiverChoice();
+      store("ob_receiver_type", c.type || "");
+    };
+    sel.addEventListener("change", sync);
+    other?.addEventListener("input", sync);
+    num?.addEventListener("input", () => store("ob_receiver_number", num.value.trim()));
+    sync();
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", setupReceiverField);
+  else setupReceiverField();
+
   window.handleProcessReal = async function (jobId) {
     const job = (jobsCache || []).find((j) => Number(j.id) === Number(jobId));
     const step = Number(document.getElementById("unified-step")?.value || 1);
@@ -240,6 +277,8 @@
           start_time: job?.start_time || null,
           end_time: job?.end_time || null,
           step_seconds: step,
+          receiver_type: receiverChoice().type,
+          receiver_number: receiverChoice().number,
         }),
       });
       let payload = {};

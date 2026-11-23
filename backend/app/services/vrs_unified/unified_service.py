@@ -450,8 +450,13 @@ def process_unified_vrs(
     start_time: str | None = None,
     end_time: str | None = None,
     network_mode: str = "master",
+    receiver_type: str | None = None,
+    receiver_number: str | None = None,
 ) -> dict:
     """Gera a base VRS na janela exata pedida.
+
+    receiver_type / receiver_number: o que vai em REC # / TYPE / VERS do RINEX
+    (escolha do usuário); o COMMENT de estação virtual continua no cabeçalho.
 
     network_mode="master": transporte geométrico da base mais próxima (padrão).
     network_mode="basic": correção de rede do motor básico, adensada.
@@ -481,6 +486,7 @@ def process_unified_vrs(
         return _finish_unified(
             job, results_dir, epochs, skipped, target_xyz, start_local, end_local,
             start_utc, end_utc, step_seconds, {"network_mode": "master", **info},
+            receiver=receiver_header(receiver_type, receiver_number),
         )
 
     _write_progress(results_dir, 5, "basic", "Gerando observações de rede (motor básico)")
@@ -534,7 +540,8 @@ def process_unified_vrs(
     return _finish_unified(
         job, results_dir, epochs, skipped, target_xyz, start_local, end_local,
         start_utc, end_utc, step_seconds,
-        {
+        receiver=receiver_header(receiver_type, receiver_number),
+        extra={
             "network_mode": "basic",
             "requested_epochs": len(grid),
             "basic_fallback_to_reference_base": "reference_base_fallback" in basic_summary,
@@ -587,10 +594,23 @@ def _copy_navigation_files(results_dir: Path, rinex_name: str, nav_paths: list) 
     return out
 
 
+def receiver_header(receiver_type: str | None, receiver_number: str | None) -> dict:
+    """Campos REC # / TYPE / VERS (RINEX: 20 colunas ASCII cada)."""
+    def clean(value: str | None) -> str:
+        text = "".join(ch for ch in str(value or "") if 32 <= ord(ch) < 127)
+        return " ".join(text.upper().split())[:20]
+
+    rtype = clean(receiver_type)
+    if not rtype:
+        return {"number": "VRS", "type": "ORBITBASE VRS", "version": "1.0"}
+    return {"number": clean(receiver_number), "type": rtype, "version": "ORBITBASE 1.0"}
+
+
 def _finish_unified(
     job, results_dir: Path, epochs, skipped, target_xyz, start_local, end_local,
-    start_utc, end_utc, step_seconds, extra: dict,
+    start_utc, end_utc, step_seconds, extra: dict, receiver: dict | None = None,
 ) -> dict:
+    receiver = receiver or receiver_header(None, None)
     if not epochs:
         raise ValueError("Nenhuma época válida na janela pedida.")
     _write_progress(results_dir, 90, "write", "Gravando RINEX")
@@ -603,8 +623,9 @@ def _finish_unified(
         advanced_seed={"epochs": epochs},
         marker_name=marker,
         receiver_brand="ORBITBASE",
-        receiver_model="ORBITBASE VRS",
-        receiver_version="1.0",
+        receiver_number=receiver["number"],
+        receiver_model=receiver["type"],
+        receiver_version=receiver["version"],
         antenna_model="VIRTUAL",
         approx_position_xyz=target_xyz,
         antenna_delta_hen=(0.0, 0.0, 0.0),
@@ -619,6 +640,7 @@ def _finish_unified(
     )
     summary = {
         "engine": "unified_v1",
+        "receiver": receiver,
         "navigation_files": nav_outputs,
         "step_seconds": step_seconds,
         "window_local": [start_local.isoformat(), end_local.isoformat()],
