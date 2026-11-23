@@ -7,7 +7,8 @@
    ========================================================= */
 
 //const API_BASE_URL = "https://84a4-191-6-124-131.ngrok-free.app";
-const API_BASE_URL = "http://127.0.0.1:8000";
+// Local (Live Server / arquivo): API em 127.0.0.1:8000. Em produção: mesma origem, prefixo /api.
+const API_BASE_URL = (["localhost", "127.0.0.1", ""].includes(window.location.hostname) ? "http://127.0.0.1:8000" : `${window.location.origin}/api`);
 
 let orbitbaseMap = null;
 let previewTargetMarker = null;
@@ -166,8 +167,13 @@ function finishProcessingModal(progress, isError = false) {
   processingModalCloseBtn.classList.remove("hidden");
 }
 
-processingModalCloseBtn?.addEventListener("click", () => {
+processingModalCloseBtn?.addEventListener("click", async () => {
   closeProcessingModal();
+  try {
+    await refreshJobsTableSafe();
+  } catch (error) {
+    console.error("Erro ao atualizar jobs:", error);
+  }
 });
 
 
@@ -199,9 +205,9 @@ function setCurrentMode(mode) {
 }
 
 function getDashboardUrlByMode(mode) {
-  return mode === "advanced"
-    ? "./dashboard_advanced.html"
-    : "./dashboard.html";
+  // Interface única: o login sempre leva ao painel principal. As telas
+  // clássica (classic/dashboard.html) e avançada ficam acessíveis por URL.
+  return "./dashboard.html";
 }
 
 function isAdvancedDashboardPage() {
@@ -1263,6 +1269,12 @@ window.handleValidateNetwork = async function (jobId) {
 };
 
 async function refreshJobsTableSafe() {
+  // loadDashboard busca e RENDERIZA a tabela (fetchJobs só busca os dados),
+  // assim o botão Exportar habilita sem precisar recarregar a página.
+  if (typeof loadDashboard === "function") {
+    return await loadDashboard();
+  }
+
   if (typeof loadJobs === "function") {
     return await loadJobs();
   }

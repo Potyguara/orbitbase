@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from math import cos, radians, sin, sqrt
 from pathlib import Path
 import json
@@ -19,6 +19,7 @@ from .advanced_ephemeris_service import (
     ensure_precise_ephemeris_products,
 )
 from .advanced_geometry_service import build_precise_geometry_cache
+from .advanced_json_io import dump_json_file, max_rss_mb, debug_seed_dumps_enabled
 from .advanced_nav_service import resolve_advanced_navigation_files
 from .advanced_observation_interpolation_service import (
     interpolate_advanced_observations,
@@ -59,17 +60,12 @@ def _json_default(value):
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
+def _geometry_summary(geometry_cache: dict) -> dict:
+    return {k: v for k, v in (geometry_cache or {}).items() if k != "epochs"}
+
+
 def _write_json(path: Path, payload) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            payload,
-            indent=2,
-            ensure_ascii=False,
-            default=_json_default,
-        ),
-        encoding="utf-8",
-    )
+    dump_json_file(path, payload)
 
 
 def _ensure_utc_datetime(value):
@@ -257,6 +253,39 @@ def _summarize_base_numeric_data(base_numeric_data: list[dict]) -> dict:
     }
 
 
+# Margem lida das bases além da janela pedida. As bases RBMC têm épocas a cada
+# 15/30 s; sem a margem, um início como 07:05:22 não tem época anterior para
+# interpolar e a grade era cortada para 07:05:30.
+BASE_WINDOW_PADDING_SECONDS = 120
+
+
+def _base_extraction_window(window: dict) -> tuple[datetime, datetime]:
+    pad = timedelta(seconds=BASE_WINDOW_PADDING_SECONDS)
+    return window["start_utc"] - pad, window["end_utc"] + pad
+
+
+def _merge_base_epochs_into_grid(
+    time_grid: list[datetime], base_numeric_data: list[dict], window: dict
+) -> list[datetime]:
+    lo, hi = _base_extraction_window(window)
+    merged = set(time_grid)
+    for base in base_numeric_data or []:
+        for ep in base.get("epochs") or []:
+            raw = ep.get("epoch") or ep.get("epoch_utc")
+            if isinstance(raw, str):
+                try:
+                    raw = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+            if not isinstance(raw, datetime):
+                continue
+            if raw.tzinfo is None:
+                raw = raw.replace(tzinfo=timezone.utc)
+            if lo <= raw <= hi:
+                merged.add(raw)
+    return sorted(merged)
+
+
 def _build_effective_time_grid(
     time_grid: list[datetime],
     base_numeric_data: list[dict],
@@ -270,8 +299,12 @@ def _build_effective_time_grid(
     ]
 
     if not valid_bases:
+        start = time_grid[0].isoformat() if time_grid else "?"
+        end = time_grid[-1].isoformat() if time_grid else "?"
         raise ValueError(
-            "Nenhuma base possui épocas válidas após a normalização do base_numeric_data."
+            "Nenhuma base RBMC tem observações na janela pedida "
+            f"({start} a {end} UTC). Confira se a data e os horários correspondem "
+            "ao dia dos arquivos RBMC do job."
         )
 
     common_start = max(b["first_epoch"] for b in valid_bases)
@@ -632,10 +665,12 @@ def process_real_vrs_advanced(
         f"janela={window['start_utc'].isoformat()} -> {window['end_utc'].isoformat()}",
     )
 
+    base_start_utc, base_end_utc = _base_extraction_window(window)
+
     base_numeric_data = build_base_numeric_data_from_candidates(
         candidate_metas=candidate_metas,
-        start_utc=window["start_utc"],
-        end_utc=window["end_utc"],
+        start_utc=base_start_utc,
+        end_utc=base_end_utc,
         step_seconds=int(cfg["target_step_seconds"]),
     )
 
@@ -919,16 +954,27 @@ def process_real_vrs_advanced(
         "Preparando geometria com efemérides precisas",
     )
 
+    geometry_time_grid = effective_time_grid
+    if cfg.get("interpolate_phase_observables"):
+        # O modo com fase interpola entre épocas da base mestra (inclusive as da
+        # margem antes/depois da janela), então elas também precisam de geometria.
+        geometry_time_grid = _merge_base_epochs_into_grid(
+            effective_time_grid, base_numeric_data, window
+        )
+
     geometry_cache = build_precise_geometry_cache(
-        time_grid=effective_time_grid,
+        time_grid=geometry_time_grid,
         precise_products=precise_products,
         navigation_context=nav_context,
     )
 
+    # Só o resumo: as épocas completas (passo de 1 s x horas x satélites) não
+    # cabem em memória quando serializadas.
     _write_json(
         metadata_root / "advanced_geometry_cache.json",
-        geometry_cache,
+        _geometry_summary(geometry_cache),
     )
+    print(f"[ADV-MEM] after_geometry max_rss_mb={max_rss_mb():.0f}", flush=True)
 
     if int(geometry_cache.get("epochs_with_geometry", 0) or 0) <= 0:
         message = geometry_cache.get("message") or (
@@ -1005,6 +1051,9 @@ def process_real_vrs_advanced(
         f"[ADV-PIPE] advanced_seed_pre_ppp_type={type(advanced_seed_pre_ppp).__name__}",
         flush=True,
     )
+    # Libera as épocas da geometria: daqui em diante só o resumo é usado.
+    geometry_cache = _geometry_summary(geometry_cache)
+    print(f"[ADV-MEM] after_interpolation max_rss_mb={max_rss_mb():.0f}", flush=True)
 
     if not isinstance(advanced_seed_pre_ppp, dict):
         raise ValueError("A interpolação avançada retornou estrutura inválida.")
@@ -1176,6 +1225,11 @@ def process_real_vrs_advanced(
         ppp_filter_diagnostics=ppp_filter_diagnostics,
     )
 
+    # Mantém só o seed escolhido em memória.
+    advanced_seed_pre_ppp = None
+    advanced_seed_post_ppp = None
+    print(f"[ADV-MEM] after_ppp max_rss_mb={max_rss_mb():.0f}", flush=True)
+
     final_seed_json_path = write_advanced_debug_seed(
         str(result_root / "advanced_seed_final.json"),
         final_seed,
@@ -1265,7 +1319,7 @@ def process_real_vrs_advanced(
         "precise_products": precise_products,
         "time_grid_count": len(time_grid),
         "effective_time_grid_count": len(effective_time_grid),
-        "geometry_cache": geometry_cache,
+        "geometry_cache": _geometry_summary(geometry_cache),
         "validation": validation,
         "pre_ppp_seed_json_path": pre_ppp_seed_json_path,
         "post_ppp_seed_json_path": post_ppp_seed_json_path,

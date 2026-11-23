@@ -1,0 +1,47 @@
+# OrbitBase na VPS. Limites pensados para uma KVM 1 (1 vCPU, 4 GB) que também atende outro site.
+name: orbitbase
+
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: orbitbase-backend:latest
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      default:
+        aliases: [orbitbase-api]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////app/backend/data/orbitbase.db}
+    volumes:
+      - ./data/storage:/app/backend/storage
+      - ./data/db:/app/backend/data
+    # No máximo 75% de 1 vCPU e prioridade de CPU menor que o resto do servidor
+    cpus: ${ORBITBASE_CPUS:-0.75}
+    cpu_shares: 512
+    # Modo avançado com passo de 1 s em várias horas usa bastante RAM; o excedente
+    # pode ir para a swap do host (memswap = RAM + swap permitida ao container).
+    mem_limit: ${ORBITBASE_MEM:-2600m}
+    memswap_limit: ${ORBITBASE_MEMSWAP:-3600m}
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  web:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on: [backend]
+    volumes:
+      - ../frontend:/usr/share/nginx/html:ro
+      # Pasta inteira (não arquivo único): um git checkout troca o inode e o container veria a versão antiga.
+      - ./nginx:/etc/nginx/conf.d:ro
+    # Só escuta em localhost: o acesso público passa pelo servidor web do host (com HTTPS).
+    ports:
+      - "127.0.0.1:${ORBITBASE_PORT:-8088}:80"
+    cpus: 0.25
+    mem_limit: 96m
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }

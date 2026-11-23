@@ -90,7 +90,9 @@ def _parse_additional_sat_lines(
 
     while len(sats) < total and idx < len(lines):
         line = lines[idx]
-        block = line[32:68] if len(line) >= 68 else line
+        # a lista de satélites das linhas de continuação fica sempre nas
+        # colunas 33-68; linhas mais curtas (última linha da lista) também
+        block = line[32:68]
 
         for i in range(0, len(block), 3):
             sat = _normalize_satellite_code(block[i : i + 3])
@@ -133,6 +135,15 @@ def _parse_obs_types_from_header(header_lines: list[str]) -> list[str]:
         obs_types = obs_types[:expected_count]
 
     return obs_types
+
+
+def _parse_antenna_delta_hen(header_lines: list[str]) -> tuple[float, float, float]:
+    """ANTENNA: DELTA H/E/N do cabeçalho (altura da antena da base sobre o marco)."""
+    for line in header_lines:
+        if line[60:80].strip() == "ANTENNA: DELTA H/E/N":
+            values = [_safe_float(line[i : i + 14]) for i in (0, 14, 28)]
+            return tuple(v or 0.0 for v in values)  # type: ignore[return-value]
+    return (0.0, 0.0, 0.0)
 
 
 def _obs_lines_per_satellite(num_obs_types: int) -> int:
@@ -245,6 +256,7 @@ def extract_rinex_observations_for_window(
         "label": label,
         "rinex_path": str(path),
         "obs_types": obs_types,
+        "antenna_delta_hen": list(_parse_antenna_delta_hen(header_lines)),
         "step_seconds": step_seconds,
         "window_start_utc": _dt_to_iso(start_utc),
         "window_end_utc": _dt_to_iso(end_utc),

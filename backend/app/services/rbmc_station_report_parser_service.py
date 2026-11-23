@@ -92,6 +92,37 @@ def _parse_datetime_pt(value: str | None) -> datetime | None:
         return None
 
 
+_UF_BY_NAME = {
+    "acre": "AC", "alagoas": "AL", "amapa": "AP", "amazonas": "AM", "bahia": "BA",
+    "ceara": "CE", "distrito federal": "DF", "espirito santo": "ES", "goias": "GO",
+    "maranhao": "MA", "mato grosso": "MT", "mato grosso do sul": "MS",
+    "minas gerais": "MG", "para": "PA", "paraiba": "PB", "parana": "PR",
+    "pernambuco": "PE", "piaui": "PI", "rio de janeiro": "RJ",
+    "rio grande do norte": "RN", "rio grande do sul": "RS", "rondonia": "RO",
+    "roraima": "RR", "santa catarina": "SC", "sao paulo": "SP", "sergipe": "SE",
+    "tocantins": "TO",
+}
+
+
+def _parse_state(value: str | None) -> str | None:
+    """Converte o campo Estado (sigla ou nome por extenso) em UF; None se não for brasileiro."""
+    if not value:
+        return None
+    import unicodedata
+
+    raw = value.strip()
+    if re.fullmatch(r"[A-Z]{2}", raw[:2]) and (len(raw) == 2 or not raw[2].isalpha()):
+        return raw[:2] if raw[:2] in _UF_BY_NAME.values() else None
+    norm = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode().lower()
+    norm = re.sub(r"[^a-z ]", " ", norm)
+    norm = re.sub(r"\s+", " ", norm).strip()
+    # tenta o nome mais longo primeiro ("mato grosso do sul" antes de "mato grosso", "para" por último)
+    for name in sorted(_UF_BY_NAME, key=len, reverse=True):
+        if norm == name or norm.startswith(name + " "):
+            return _UF_BY_NAME[name]
+    return None
+
+
 def infer_station_code_from_filename(file_name: str) -> str | None:
     if not file_name:
         return None
@@ -135,7 +166,7 @@ def parse_rbmc_station_report_text(text: str, file_name: str | None = None) -> d
     station_name = _normalize_spaces(_extract(r"Nome da Estação:\s*(.+)", text))
 
     station_code = _normalize_spaces(
-        _extract(r"Ident\.?\s*da\s*Estação:\s*([A-Za-z0-9]{4,10})", text)
+        _extract(r"Ident\.?\s*da\s*Estação\s*[:\-–]\s*([A-Za-z0-9]{4,10})", text)
     )
     if not station_code:
         station_code = infer_station_code_from_filename(file_name or "")
@@ -146,7 +177,7 @@ def parse_rbmc_station_report_text(text: str, file_name: str | None = None) -> d
     )
 
     city = _normalize_spaces(_extract(r"Cidade:\s*(.+)", text))
-    state = _normalize_spaces(_extract(r"Estado:\s*([A-Za-z]{2})", text))
+    state = _parse_state(_extract(r"Estado:\s*(.+)", text))
 
     lat_text = _extract(r"Latitude:\s*(.+?)\s+Sigma:", text, re.S)
     lon_text = _extract(r"Longitude:\s*(.+?)\s+Sigma:", text, re.S)

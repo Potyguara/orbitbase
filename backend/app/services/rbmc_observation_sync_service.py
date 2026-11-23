@@ -53,7 +53,10 @@ def _build_ibge_zip_candidates(station_code: str, session_date: str) -> list[str
     base_name = f"{station}{doy}1.{year_2}"
 
     # candidatos ZIP
+    root = "https://geoftp.ibge.gov.br/informacoes_sobre_posicionamento_geodesico/rbmc/dados"
     return [
+        # padrão publicado pelo IBGE: dados/AAAA/DDD/ssssDDD1.zip (sem subpasta)
+        f"{root}/{dt.year}/{doy}/{station}{doy}1.zip",
         # zip do conjunto da estação
         f"https://geoftp.ibge.gov.br/informacoes_sobre_posicionamento_geodesico/rbmc/dados/{dt.year}/{doy}/{station}/{base_name}.zip",
         f"https://geoftp.ibge.gov.br/informacoes_sobre_posicionamento_geodesico/rbmc/dados/{dt.year}/{doy}/{station}/{station}{doy}1.zip",

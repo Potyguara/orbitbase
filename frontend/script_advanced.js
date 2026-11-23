@@ -1,4 +1,5 @@
-const API_BASE = "http://127.0.0.1:8000";
+// Local (Live Server / arquivo): API em 127.0.0.1:8000. Em produção: mesma origem, prefixo /api.
+const API_BASE = (["localhost", "127.0.0.1", ""].includes(window.location.hostname) ? "http://127.0.0.1:8000" : `${window.location.origin}/api`);
 const TOKEN_KEY = "orbitbase_token";
 
 let advancedPollingTimer = null;
@@ -181,6 +182,62 @@ function buildAdvancedPayload() {
         document.getElementById("advanced-antenna-model")?.value.trim() || "",
     },
   };
+}
+
+async function downloadAdvancedFiles(jobId) {
+  const response = await fetch(`${API_BASE}/jobs/${jobId}/export-advanced`, {
+    method: "GET",
+    headers: getAuthHeaders(false),
+  });
+  if (!response.ok) {
+    let detail = "Não foi possível baixar os arquivos do modo avançado.";
+    try {
+      detail = (await response.json())?.detail || detail;
+    } catch (_) {}
+    throw new Error(detail);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = match ? match[1] : `job_${jobId}_avancado.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+let advancedJobsCache = null;
+
+async function getAdvancedJob(jobId) {
+  if (!advancedJobsCache) {
+    const data = await apiFetchAdvanced("/jobs", { method: "GET" });
+    advancedJobsCache = Array.isArray(data) ? data : (data?.jobs || data?.items || []);
+  }
+  return advancedJobsCache.find((job) => Number(job.id) === Number(jobId)) || null;
+}
+
+// Preenche a data/horários com os do job e impede rodar numa data diferente
+// da dos arquivos RBMC do job (o erro era "Nenhuma base possui épocas válidas").
+async function fillAdvancedFormFromJob(jobId) {
+  if (!jobId) return;
+  try {
+    const job = await getAdvancedJob(jobId);
+    if (!job) return;
+    const dateInput = document.getElementById("advanced-session-date");
+    if (dateInput && job.session_date) dateInput.value = String(job.session_date).slice(0, 10);
+    for (const [id, field] of [["advanced-start-time", "start_time"], ["advanced-end-time", "end_time"]]) {
+      const input = document.getElementById(id);
+      if (input && !input.value.trim() && job[field]) {
+        const value = String(job[field]);
+        input.value = value.length === 5 ? `${value}:00` : value;
+      }
+    }
+  } catch (error) {
+    console.warn("Não foi possível carregar os dados do job:", error);
+  }
 }
 
 function validateAdvancedForm(jobId, payload) {
@@ -369,6 +426,22 @@ function initAdvancedDashboardPage() {
   const form = document.getElementById("advanced-job-form");
   if (!form) return;
 
+  document.getElementById("advanced-download-btn")?.addEventListener("click", async () => {
+    try {
+      const jobId = Number(document.getElementById("advanced-job-id")?.value || 0);
+      if (!jobId) throw new Error("Informe o ID do job para baixar os arquivos.");
+      await downloadAdvancedFiles(jobId);
+    } catch (error) {
+      showAdvancedMessage(error.message || "Falha ao baixar os arquivos.", true);
+    }
+  });
+
+  const jobIdInput = document.getElementById("advanced-job-id");
+  jobIdInput?.addEventListener("change", () => {
+    fillAdvancedFormFromJob(Number(jobIdInput.value || 0));
+  });
+  if (jobIdInput?.value) fillAdvancedFormFromJob(Number(jobIdInput.value));
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
@@ -377,7 +450,18 @@ function initAdvancedDashboardPage() {
         document.getElementById("advanced-job-id")?.value || 0
       );
 
+      const job = await getAdvancedJob(jobId).catch(() => null);
+      const jobDate = job?.session_date ? String(job.session_date).slice(0, 10) : "";
+      const formDate = document.getElementById("advanced-session-date")?.value || "";
+      if (jobDate && formDate && jobDate !== formDate) {
+        throw new Error(
+          `A data informada (${formDate}) é diferente da data do job ${jobId} (${jobDate}). ` +
+          "As bases RBMC do job são desse dia; corrija a data ou crie um job novo."
+        );
+      }
+
       await processAdvancedJob(jobId);
+      advancedJobsCache = null;
     } catch (error) {
       console.error("Falha no modo avançado:", error);
       showAdvancedMessage(
@@ -388,7 +472,108 @@ function initAdvancedDashboardPage() {
   });
 }
 
+let unifiedPollingTimer = null;
+
+async function pollUnifiedProgress(jobId) {
+  try {
+    const progress = await apiFetchAdvanced(`/jobs/${jobId}/progress-unified`, {
+      method: "GET",
+      headers: getAuthHeaders(false),
+    });
+    setAdvancedProgress(progress.percent || 0, progress.message || progress.step || "Processando...", "");
+    if (progress.status === "completed" || progress.status === "failed") {
+      clearInterval(unifiedPollingTimer);
+      unifiedPollingTimer = null;
+    }
+  } catch (error) {
+    console.error("Erro ao consultar progresso do motor único:", error);
+  }
+}
+
+async function processUnifiedJob(jobId) {
+  const startTime = document.getElementById("advanced-start-time")?.value.trim();
+  const endTime = document.getElementById("advanced-end-time")?.value.trim();
+  const step = Number(document.getElementById("advanced-step-seconds")?.value || 1);
+  if (!jobId) throw new Error("Informe o ID do job.");
+  if (![1, 5, 10, 15, 30].includes(step)) throw new Error("Intervalo deve ser 1, 5, 10, 15 ou 30 s.");
+
+  const job = await getAdvancedJob(jobId).catch(() => null);
+  const jobDate = job?.session_date ? String(job.session_date).slice(0, 10) : "";
+  const formDate = document.getElementById("advanced-session-date")?.value || "";
+  if (jobDate && formDate && jobDate !== formDate) {
+    throw new Error(`A data informada (${formDate}) é diferente da data do job ${jobId} (${jobDate}).`);
+  }
+
+  clearAdvancedMessage();
+  setAdvancedProgress(2, "Iniciando motor único", "");
+  if (unifiedPollingTimer) clearInterval(unifiedPollingTimer);
+  unifiedPollingTimer = setInterval(() => pollUnifiedProgress(jobId), 3000);
+  try {
+    const data = await apiFetchAdvanced(`/jobs/${jobId}/process-unified`, {
+      method: "POST",
+      headers: getAuthHeaders(true),
+      body: JSON.stringify({ start_time: startTime, end_time: endTime, step_seconds: step }),
+    });
+    const r = data?.result || {};
+    setAdvancedProgress(100, "Base gerada", "");
+    showAdvancedMessage(
+      `Motor único concluído: ${r.epochs_written} épocas a ${r.step_seconds} s ` +
+      `(${r.window_local?.[0]?.slice(11)} a ${r.window_local?.[1]?.slice(11)}). Use "Baixar base do motor único".`
+    );
+  } finally {
+    if (unifiedPollingTimer) clearInterval(unifiedPollingTimer);
+    unifiedPollingTimer = null;
+  }
+}
+
+async function downloadUnifiedFiles(jobId) {
+  const response = await fetch(`${API_BASE}/jobs/${jobId}/export-unified`, {
+    method: "GET",
+    headers: getAuthHeaders(false),
+  });
+  if (!response.ok) {
+    let detail = "Não foi possível baixar a base do motor único.";
+    try {
+      detail = (await response.json())?.detail || detail;
+    } catch (_) {}
+    throw new Error(detail);
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `job_${jobId}_base.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+function bindUnifiedButtons() {
+  const jobIdOf = () => Number(document.getElementById("advanced-job-id")?.value || 0);
+  document.getElementById("unified-process-btn")?.addEventListener("click", async () => {
+    const btn = document.getElementById("unified-process-btn");
+    try {
+      if (btn) btn.disabled = true;
+      await processUnifiedJob(jobIdOf());
+    } catch (error) {
+      showAdvancedMessage(error.message || "Falha no motor único.", true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+  document.getElementById("unified-download-btn")?.addEventListener("click", async () => {
+    try {
+      if (!jobIdOf()) throw new Error("Informe o ID do job para baixar a base.");
+      await downloadUnifiedFiles(jobIdOf());
+    } catch (error) {
+      showAdvancedMessage(error.message || "Falha ao baixar a base.", true);
+    }
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   if (!isAdvancedPage()) return;
   initAdvancedDashboardPage();
+  bindUnifiedButtons();
 });

@@ -14,15 +14,6 @@ def _json_default(value):
 
 
 def write_advanced_debug_report(output_path: str, payload: dict) -> str:
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            payload,
-            indent=2,
-            ensure_ascii=False,
-            default=_json_default,
-        ),
-        encoding="utf-8",
-    )
-    return str(path)
+    from .advanced_json_io import dump_json_file
+
+    return dump_json_file(output_path, payload)

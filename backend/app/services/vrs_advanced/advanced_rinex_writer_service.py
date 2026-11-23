@@ -19,19 +19,13 @@ def _json_default(value):
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
-def write_advanced_debug_seed(output_path: str, advanced_seed: dict) -> str:
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            advanced_seed,
-            indent=2,
-            ensure_ascii=False,
-            default=_json_default,
-        ),
-        encoding="utf-8",
-    )
-    return str(path)
+def write_advanced_debug_seed(output_path: str, advanced_seed: dict) -> str | None:
+    """Grava o seed completo só quando ORBITBASE_ADV_DUMP_SEEDS=1 (debug)."""
+    from .advanced_json_io import debug_seed_dumps_enabled, dump_json_file
+
+    if not debug_seed_dumps_enabled():
+        return None
+    return dump_json_file(output_path, advanced_seed, indent=None)
 
 
 def _to_datetime(value: Any) -> datetime | None:
@@ -282,6 +276,7 @@ def _is_satellite_usable_for_writer(
     sat_code: str,
     obs_map: dict[str, float | None],
     require_phase_observables: bool,
+    phase_systems: tuple[str, ...] = ("G",),
 ) -> bool:
     sat_code = _normalize_satellite_code(sat_code)
     if not sat_code:
@@ -292,7 +287,7 @@ def _is_satellite_usable_for_writer(
         return False
 
     if require_phase_observables:
-        if system != "G":
+        if system not in phase_systems:
             return False
         return _is_dual_frequency_phase_usable(obs_map)
 
@@ -355,7 +350,10 @@ def write_advanced_rinex_from_seed(
     require_phase_observables: bool = True,
     output_systems: list[str] | tuple[str, ...] | set[str] | None = None,
     forced_obs_types: list[str] | None = None,
+    phase_systems: tuple[str, ...] = ("G",),
+    receiver_number: str = "VRS",
 ) -> str:
+    phase_systems = tuple(str(x).strip().upper() for x in phase_systems)
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -401,6 +399,7 @@ def write_advanced_rinex_from_seed(
                 sat_code=sat_code,
                 obs_map=obs_map,
                 require_phase_observables=require_phase_observables,
+                phase_systems=phase_systems,
             ):
                 continue
 
@@ -461,6 +460,7 @@ def write_advanced_rinex_from_seed(
                 sat_code=sat_code,
                 obs_map=filtered_map,
                 require_phase_observables=require_phase_observables,
+                phase_systems=phase_systems,
             ):
                 new_sat_records.append((sat_code, filtered_map))
 
@@ -499,7 +499,8 @@ def write_advanced_rinex_from_seed(
         interval_seconds = _safe_float(advanced_seed.get("interval_seconds"), 1.0)
 
     if require_phase_observables:
-        rinex_system = "G"
+        present = {code[:1] for _, recs in epoch_records for code, _ in recs}
+        rinex_system = "M" if len(present) > 1 else (next(iter(present)) if present else "G")
     else:
         rinex_system = "M" if len(output_systems) > 1 else next(iter(output_systems))
 
@@ -528,7 +529,7 @@ def write_advanced_rinex_from_seed(
     )
     lines.append(
         _header_line(
-            "OrbitBase           BIOME                "
+            "OrbitBase           OrbitBase            "
             + datetime.utcnow().strftime("%d-%b-%y %H:%M").upper(),
             "PGM / RUN BY / DATE",
         )
@@ -540,13 +541,13 @@ def write_advanced_rinex_from_seed(
     )
     lines.append(
         _header_line(
-            f"{'VRSGEN':<20}{receiver_model[:20]:<20}{receiver_version[:20]:<20}",
+            f"{receiver_number[:20]:<20}{receiver_model[:20]:<20}{receiver_version[:20]:<20}",
             "REC # / TYPE / VERS",
         )
     )
     lines.append(
         _header_line(
-            f"{'VRSANT':<20}{antenna_model[:20]:<20}",
+            f"{'VRS':<20}{antenna_model[:20]:<20}",
             "ANT # / TYPE",
         )
     )
@@ -576,9 +577,9 @@ def write_advanced_rinex_from_seed(
     lines.append(
         _header_line(
             (
-                "Advanced VRS master-phase GPS-only"
+                "VIRTUAL REFERENCE STATION - OrbitBase"
                 if require_phase_observables
-                else "Advanced VRS network-code compact"
+                else "VIRTUAL REFERENCE STATION - OrbitBase"
             ),
             "COMMENT",
         )

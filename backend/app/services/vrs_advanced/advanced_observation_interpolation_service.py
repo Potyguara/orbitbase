@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from datetime import datetime, timezone
-from math import cos, sin, sqrt
+from math import asin, atan2, cos, exp, hypot, sin, sqrt
 from statistics import median
 from typing import Any
 
@@ -161,6 +161,86 @@ def _geometric_range(
     return rho
 
 
+_WGS84_A = 6378137.0
+_WGS84_E2 = 6.69437999014e-3
+
+
+def _geodetic_lat_h(xyz: tuple[float, float, float]) -> tuple[float, float, float]:
+    """Latitude, longitude (rad) e altura elipsoidal (m) a partir de ECEF."""
+    x, y, z = xyz
+    lon = atan2(y, x)
+    p = hypot(x, y)
+    lat = atan2(z, p * (1.0 - _WGS84_E2))
+    h = 0.0
+    for _ in range(5):
+        n = _WGS84_A / sqrt(1.0 - _WGS84_E2 * sin(lat) ** 2)
+        h = p / max(cos(lat), 1e-12) - n
+        lat = atan2(z, p * (1.0 - _WGS84_E2 * n / (n + h)))
+    return lat, lon, h
+
+
+def _apply_antenna_delta(
+    marker_xyz: tuple[float, float, float], delta_hen: Any
+) -> tuple[float, float, float]:
+    """Desloca o marco pelo ANTENNA: DELTA H/E/N (altura, leste, norte)."""
+    if not isinstance(delta_hen, (list, tuple)) or len(delta_hen) < 3:
+        return marker_xyz
+    dh = _safe_float(delta_hen[0]) or 0.0
+    de = _safe_float(delta_hen[1]) or 0.0
+    dn = _safe_float(delta_hen[2]) or 0.0
+    if dh == 0.0 and de == 0.0 and dn == 0.0:
+        return marker_xyz
+    lat, lon, _ = _geodetic_lat_h(marker_xyz)
+    up = (cos(lat) * cos(lon), cos(lat) * sin(lon), sin(lat))
+    east = (-sin(lon), cos(lon), 0.0)
+    north = (-sin(lat) * cos(lon), -sin(lat) * sin(lon), cos(lat))
+    return tuple(
+        marker_xyz[i] + dh * up[i] + de * east[i] + dn * north[i] for i in range(3)
+    )  # type: ignore[return-value]
+
+
+def _slant_tropo_delay(receiver_xyz: tuple[float, float, float], sat_xyz: dict) -> float:
+    """Atraso troposférico inclinado (m) com atmosfera padrão.
+
+    Saastamoinen hidrostático + úmido típico de região equatorial, com função de
+    mapeamento simples. Só a diferença base->alvo entra nas observações, então o
+    erro absoluto do modelo se cancela quase todo; o que importa é corrigir a
+    diferença de elevação e de altitude entre a base e o alvo.
+    """
+    sx = _safe_float(sat_xyz.get("x"))
+    sy = _safe_float(sat_xyz.get("y"))
+    sz = _safe_float(sat_xyz.get("z"))
+    if sx is None or sy is None or sz is None:
+        return 0.0
+
+    lat, lon, h = _geodetic_lat_h(receiver_xyz)
+    dx, dy, dz = sx - receiver_xyz[0], sy - receiver_xyz[1], sz - receiver_xyz[2]
+    up = cos(lat) * cos(lon) * dx + cos(lat) * sin(lon) * dy + sin(lat) * dz
+    dist = sqrt(dx * dx + dy * dy + dz * dz)
+    if dist <= 0.0:
+        return 0.0
+    elev = asin(max(-1.0, min(1.0, up / dist)))
+    sin_e = sin(max(elev, 0.05))  # ~3 graus
+
+    h_clamped = max(-500.0, min(h, 9000.0))
+    pressure = 1013.25 * (1.0 - 2.2557e-5 * h_clamped) ** 5.2568
+    zhd = 0.0022768 * pressure / (
+        1.0 - 0.00266 * cos(2.0 * lat) - 0.00028 * h_clamped / 1000.0
+    )
+    zwd = 0.25 * exp(-max(h_clamped, 0.0) / 2000.0)
+    mapping = 1.001 / sqrt(0.002001 + sin_e * sin_e)
+    return (zhd + zwd) * mapping
+
+
+def _range_with_tropo(
+    receiver_xyz: tuple[float, float, float], sat_xyz: dict
+) -> float | None:
+    rho = _geometric_range(receiver_xyz, sat_xyz)
+    if rho is None:
+        return None
+    return rho + _slant_tropo_delay(receiver_xyz, sat_xyz)
+
+
 def _median_step_seconds(
     base_numeric_data: list[dict], fallback: float = 15.0
 ) -> float:
@@ -284,6 +364,9 @@ def _normalize_base_epochs(base_numeric_data: list[dict]) -> list[dict]:
                 flush=True,
             )
             continue
+
+        # As observações referem-se ao ARP da antena da base, não ao marco.
+        bx, by, bz = _apply_antenna_delta((bx, by, bz), base.get("antenna_delta_hen"))
 
         epochs_in = base.get("epochs") or []
         epochs_out: list[dict] = []
@@ -434,8 +517,8 @@ def _transport_record_to_target(
     target_xyz: tuple[float, float, float],
     allow_phase: bool,
 ) -> dict:
-    rho_base = _geometric_range(base_xyz, sat_xyz)
-    rho_target = _geometric_range(target_xyz, sat_xyz)
+    rho_base = _range_with_tropo(base_xyz, sat_xyz)
+    rho_target = _range_with_tropo(target_xyz, sat_xyz)
 
     if rho_base is None or rho_target is None:
         return {}
@@ -551,30 +634,57 @@ def _count_base_quality(base: dict) -> tuple[int, int]:
     return gps_dual_phase_obs, gps_code_obs
 
 
-def _choose_master_base(normalized_bases: list[dict]) -> dict | None:
+# Uma base só entra na disputa de mestra se tiver pelo menos esta fração das
+# observações GPS de dupla fase da melhor base.
+MASTER_MIN_QUALITY_RATIO = 0.6
+
+
+def _choose_master_base(
+    normalized_bases: list[dict],
+    target_xyz: tuple[float, float, float] | None = None,
+) -> dict | None:
+    """Escolhe a base mestra do modo com fase.
+
+    A fase transportada carrega os erros espacialmente correlacionados da mestra
+    (troposfera, órbita, multicaminho), que crescem com a distância. Por isso,
+    entre as bases com qualidade suficiente, vence a mais próxima do alvo.
+    """
     if not normalized_bases:
         return None
 
     ranked = []
     for base in normalized_bases:
         gps_dual_phase_obs, gps_code_obs = _count_base_quality(base)
+        dist_km = None
+        if target_xyz is not None:
+            dist_km = _ecef_distance(*base["xyz"], *target_xyz) / 1000.0
         print(
             f"[ADV-INT-MASTER] station={base.get('station_code')} "
-            f"gps_dual_phase_obs={gps_dual_phase_obs} gps_code_obs={gps_code_obs}",
+            f"gps_dual_phase_obs={gps_dual_phase_obs} gps_code_obs={gps_code_obs} "
+            f"dist_km={dist_km if dist_km is None else round(dist_km, 1)}",
             flush=True,
         )
-        ranked.append(
-            (
-                gps_dual_phase_obs,
-                gps_code_obs,
-                len(base.get("epochs") or []),
-                base.get("station_code") or "",
-                base,
-            )
-        )
+        ranked.append((gps_dual_phase_obs, gps_code_obs, dist_km, base))
 
-    ranked.sort(key=lambda item: (item[0], item[1], item[2], item[3]), reverse=True)
-    return ranked[0][4] if ranked else None
+    best_quality = max(item[0] for item in ranked)
+    if best_quality <= 0:
+        return None
+
+    if target_xyz is None:
+        ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return ranked[0][3]
+
+    eligible = [
+        item for item in ranked if item[0] >= MASTER_MIN_QUALITY_RATIO * best_quality
+    ]
+    eligible.sort(key=lambda item: (item[2], -item[0]))
+    chosen = eligible[0][3]
+    print(
+        f"[ADV-INT-MASTER] chosen={chosen.get('station_code')} "
+        f"dist_km={round(eligible[0][2], 1)}",
+        flush=True,
+    )
+    return chosen
 
 
 def _build_master_time_grid(master_base: dict) -> list[datetime]:
@@ -597,6 +707,161 @@ def _allowed_systems_from_config(config: dict, phase_mode: bool) -> set[str]:
             return normalized
 
     return {"G"} if phase_mode else {"G", "R"}
+
+
+# Salto máximo aceito no resíduo (observável - distância geométrica) entre duas
+# épocas da base mestra. Acima disso há perda de ciclo ou salto de relógio do
+# receptor, e a interpolação no tempo seria inválida.
+PHASE_RESIDUAL_MAX_JUMP_M = 1000.0
+_DENSE_CODE_KEYS = ("C1", "P1", "C2", "P2")
+_DENSE_PHASE_KEYS = ("L1", "L2")
+
+
+def _residuals_at_master_epoch(rec: dict, sat_xyz: dict, master_xyz, wavelength=None) -> dict | None:
+    """Observáveis em metros menos a distância geométrica (com troposfera) base-satélite.
+
+    wavelength: função opcional obs_code -> λ (GLONASS depende do canal)."""
+    wavelength = wavelength or _gps_wavelength
+    rho = _range_with_tropo(master_xyz, sat_xyz)
+    if rho is None:
+        return None
+    out: dict[str, float] = {}
+    for key in _DENSE_CODE_KEYS:
+        value = _safe_float(rec.get(key))
+        if value is not None:
+            out[key] = value - rho
+    for key in _DENSE_PHASE_KEYS:
+        value = _safe_float(rec.get(key))
+        lam = wavelength(key)
+        if value is not None and lam:
+            out[key] = value * lam - rho
+    for key in ("S1", "S2"):
+        value = _safe_float(rec.get(key))
+        if value is not None:
+            out[key] = value
+    return out
+
+
+def _build_output_epochs_phase_dense(
+    master_base: dict,
+    geometry_epoch_map: dict[str, dict],
+    target_xyz: tuple[float, float, float],
+    time_grid: list[datetime],
+    max_gap_seconds: float,
+    min_satellites_per_epoch: int,
+    systems: tuple[str, ...] = ("G",),
+    wavelength_for=None,
+) -> tuple[list[dict], int]:
+    """Fase na grade pedida (ex.: 1 s) a partir da base mestra (ex.: 15 s).
+
+    systems: constelações transportadas (padrão só GPS). wavelength_for(sat)
+    devolve a função obs_code -> λ do satélite; None = comprimentos GPS.
+
+    Para cada satélite, o resíduo r = observável·λ - ρ(base, sat) varia devagar
+    (relógios, atmosfera, ambiguidade constante). Ele é interpolado linearmente
+    entre as duas épocas da mestra que cercam t, e o observável virtual é
+    r(t) + ρ(alvo, sat, t), com a geometria do satélite no próprio instante t.
+    """
+    master_xyz = master_base["xyz"]
+    master_epochs = [ep for ep in (master_base.get("epochs") or []) if ep.get("epoch")]
+    epoch_times = [ep["epoch"] for ep in master_epochs]
+    residual_cache: dict[int, dict[str, dict]] = {}
+
+    def _lam(sat: str):
+        if wavelength_for is None:
+            return _gps_wavelength if str(sat).startswith("G") else None
+        return wavelength_for(sat)
+
+    def residuals(idx: int) -> dict[str, dict]:
+        if idx not in residual_cache:
+            ep = master_epochs[idx]
+            geom = geometry_epoch_map.get(ep["epoch_iso"]) or {}
+            out = {}
+            for sat, rec in (ep.get("obs_map") or {}).items():
+                if str(sat)[:1] not in systems or sat not in geom:
+                    continue
+                if not _obs_has_dual_phase_gps(rec):
+                    continue
+                lam = _lam(sat)
+                if lam is None:
+                    continue
+                r = _residuals_at_master_epoch(rec, geom[sat], master_xyz, lam)
+                if r:
+                    out[sat] = r
+            residual_cache[idx] = out
+            # mantém só uma janela pequena em memória
+            for old in [k for k in residual_cache if k < idx - 2]:
+                residual_cache.pop(old, None)
+        return residual_cache[idx]
+
+    output_epochs: list[dict] = []
+    epochs_skipped = 0
+
+    for target in time_grid:
+        target_iso = _epoch_to_iso(target)
+        geom_t = geometry_epoch_map.get(target_iso) or {}
+        idx = bisect_left(epoch_times, target)
+
+        if idx < len(epoch_times) and epoch_times[idx] == target:
+            i0 = i1 = idx
+            alpha = 0.0
+        else:
+            i0, i1 = idx - 1, idx
+            if i0 < 0 or i1 >= len(epoch_times):
+                epochs_skipped += 1
+                continue
+            gap = (epoch_times[i1] - epoch_times[i0]).total_seconds()
+            if gap <= 0 or gap > max_gap_seconds:
+                epochs_skipped += 1
+                continue
+            alpha = (target - epoch_times[i0]).total_seconds() / gap
+
+        r0 = residuals(i0)
+        r1 = residuals(i1)
+        observations = []
+
+        for sat in sorted(set(r0) & set(r1)):
+            if sat not in geom_t:
+                continue
+            rho_t = _range_with_tropo(target_xyz, geom_t[sat])
+            if rho_t is None:
+                continue
+            a, b = r0[sat], r1[sat]
+            out: dict[str, float] = {}
+            jump = False
+            for key in _DENSE_CODE_KEYS + _DENSE_PHASE_KEYS:
+                if key not in a or key not in b:
+                    continue
+                if abs(b[key] - a[key]) > PHASE_RESIDUAL_MAX_JUMP_M:
+                    jump = True
+                    break
+                meters = a[key] + (b[key] - a[key]) * alpha + rho_t
+                if key in _DENSE_PHASE_KEYS:
+                    out[key] = meters / _lam(sat)(key)
+                else:
+                    out[key] = meters
+            if jump:
+                continue
+            for key in ("S1", "S2"):
+                if key in a and key in b:
+                    out[key] = a[key] + (b[key] - a[key]) * alpha
+            if not _obs_has_dual_phase_gps(out):
+                continue
+            observations.append({"satellite": sat, **out})
+
+        if len(observations) < min_satellites_per_epoch:
+            epochs_skipped += 1
+            continue
+
+        output_epochs.append(
+            {
+                "epoch": target_iso,
+                "observations": observations,
+                "satellite_count": len(observations),
+            }
+        )
+
+    return output_epochs, epochs_skipped
 
 
 def _build_output_epochs_phase_mode(
@@ -904,7 +1169,7 @@ def interpolate_advanced_observations(
         effective_real_epochs = min(len(b["epochs"]) for b in normalized_bases)
 
         if phase_mode:
-            master_base = _choose_master_base(normalized_bases)
+            master_base = _choose_master_base(normalized_bases, target_xyz)
             if master_base is None:
                 return {
                     "status": "failed",
@@ -916,8 +1181,12 @@ def interpolate_advanced_observations(
                     "summary": {},
                 }
 
-            normalized_time_grid = _build_master_time_grid(master_base)
-            output_step_seconds = native_interval
+            requested_step = float(config.get("target_step_seconds", native_interval) or native_interval)
+            dense_phase = requested_step < native_interval
+            normalized_time_grid = (
+                requested_time_grid if dense_phase else _build_master_time_grid(master_base)
+            )
+            output_step_seconds = requested_step if dense_phase else native_interval
 
             print(
                 f"[ADV-INT] requested_time_grid={len(requested_time_grid)} "
@@ -928,18 +1197,31 @@ def interpolate_advanced_observations(
                 flush=True,
             )
 
-            output_epochs, epochs_skipped = _build_output_epochs_phase_mode(
-                master_base=master_base,
-                geometry_epoch_map=geometry_epoch_map,
-                target_xyz=target_xyz,
-                min_satellites_per_epoch=min_satellites_per_epoch,
-            )
+            if dense_phase:
+                output_epochs, epochs_skipped = _build_output_epochs_phase_dense(
+                    master_base=master_base,
+                    geometry_epoch_map=geometry_epoch_map,
+                    target_xyz=target_xyz,
+                    time_grid=requested_time_grid,
+                    max_gap_seconds=max_gap_seconds,
+                    min_satellites_per_epoch=min_satellites_per_epoch,
+                )
+            else:
+                output_epochs, epochs_skipped = _build_output_epochs_phase_mode(
+                    master_base=master_base,
+                    geometry_epoch_map=geometry_epoch_map,
+                    target_xyz=target_xyz,
+                    min_satellites_per_epoch=min_satellites_per_epoch,
+                )
 
             summary = {
-                "mode": "phase_master_only",
+                "mode": "phase_master_dense" if dense_phase else "phase_master_only",
                 "master_station_code": master_base.get("station_code"),
+                "master_distance_km": round(
+                    _ecef_distance(*master_base["xyz"], *target_xyz) / 1000.0, 3
+                ),
                 "native_interval_seconds": native_interval,
-                "target_step_seconds": native_interval,
+                "target_step_seconds": output_step_seconds,
                 "max_interpolation_gap_seconds": max_gap_seconds,
                 "min_satellites_per_epoch": min_satellites_per_epoch,
                 "geometry_status": geometry_cache.get("status"),

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.deps import get_current_user, get_db
 from app.models import GnssStation, User
 from app.schemas import GnssStationRead, RbmcSyncResponse
-from app.services.rbmc_sync_service import sync_rbmc_stations
+from app.services.rbmc_sync_service import RbmcSyncInProgress, sync_rbmc_stations
 
 router = APIRouter(prefix="/gnss-stations", tags=["GNSS Stations"])
 
@@ -96,6 +96,8 @@ def sync_gnss_stations(
 
         return RbmcSyncResponse(**result)
 
+    except RbmcSyncInProgress as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
         db.rollback()
         raise HTTPException(

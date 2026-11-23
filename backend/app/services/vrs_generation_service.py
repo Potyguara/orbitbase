@@ -1935,7 +1935,7 @@ def _write_rinex_v3_mixed_obs(
     )
     lines.append(
         _pad_label(
-            f"{'OrbitBase':<20}{'OpenAI Assisted':<20}{datetime.utcnow().strftime('%Y%m%d %H%M%S UTC'):<20}",
+            f"{'OrbitBase':<20}{'OrbitBase':<20}{datetime.utcnow().strftime('%Y%m%d %H%M%S UTC'):<20}",
             "PGM / RUN BY / DATE",
         )
     )
@@ -1946,10 +1946,10 @@ def _write_rinex_v3_mixed_obs(
     )
     lines.append(
         _pad_label(
-            f"{'VRSGEN':<20}{'VIRTUAL_RCV':<20}{'1.0':<20}", "REC # / TYPE / VERS"
+            f"{'VRS':<20}{'ORBITBASE VRS':<20}{'1.0':<20}", "REC # / TYPE / VERS"
         )
     )
-    lines.append(_pad_label(f"{'VRSANT':<20}{'VIRTUAL':<40}", "ANT # / TYPE"))
+    lines.append(_pad_label(f"{'VRS':<20}{'VIRTUAL':<40}", "ANT # / TYPE"))
     lines.append(_pad_label(_build_approx_xyz_text(target), "APPROX POSITION XYZ"))
     lines.append(
         _pad_label(f"{0.0:14.4f}{0.0:14.4f}{0.0:14.4f}", "ANTENNA: DELTA H/E/N")
@@ -2172,7 +2172,7 @@ def write_master_based_ibge_ppp_rinex_v2(
     )
     lines.append(
         _pad80(
-            f"{'OrbitBase':<20}{'OpenAI Assisted':<20}{datetime.utcnow().strftime('%d-%b-%y %H:%M').upper():<20}",
+            f"{'OrbitBase':<20}{'OrbitBase':<20}{datetime.utcnow().strftime('%d-%b-%y %H:%M').upper():<20}",
             "PGM / RUN BY / DATE",
         )
     )
@@ -2183,11 +2183,11 @@ def write_master_based_ibge_ppp_rinex_v2(
     )
     lines.append(
         _pad80(
-            f"{'VRSGEN':<20}{'VIRTUAL_RCV':<20}{'1.0':<20}",
+            f"{'VRS':<20}{'ORBITBASE VRS':<20}{'1.0':<20}",
             "REC # / TYPE / VERS",
         )
     )
-    lines.append(_pad80(f"{'VRSANT':<20}{'VIRTUAL':<40}", "ANT # / TYPE"))
+    lines.append(_pad80(f"{'VRS':<20}{'VIRTUAL':<40}", "ANT # / TYPE"))
     lines.append(_pad80(_build_approx_xyz_text(target), "APPROX POSITION XYZ"))
     lines.append(_pad80(f"{0.0:14.4f}{0.0:14.4f}{0.0:14.4f}", "ANTENNA: DELTA H/E/N"))
     lines.append(_pad80(f"{1:6d}{1:6d}", "WAVELENGTH FACT L1/2"))
@@ -2221,7 +2221,7 @@ def write_master_based_ibge_ppp_rinex_v2(
     lines.append(_pad80(_fmt_time_of_obs(first_dt), "TIME OF FIRST OBS"))
     lines.append(_pad80(_fmt_time_of_obs(last_dt), "TIME OF LAST OBS"))
     lines.append(_pad80(f"{interval:10.3f}", "INTERVAL"))
-    lines.append(_pad80("OrbitBase PPP dual-frequency GPS-only file", "COMMENT"))
+    lines.append(_pad80("VIRTUAL REFERENCE STATION - OrbitBase", "COMMENT"))
 
     for prn in sorted(prn_presence.keys(), key=lambda x: int(x)):
         counts = [

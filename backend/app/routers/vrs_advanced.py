@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import date
+import io
+import zipfile
 import json
 import base64
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.deps import get_current_user, get_db
 from app.models import User, VRSJob, UserAdvancedCredentials
 from app.services.vrs_advanced.advanced_ephemeris_service import (
@@ -174,6 +179,11 @@ def process_job_advanced(
 
         earthdata_password = _decode_optional_base64(earthdata_password_raw)
 
+        if not (earthdata_username and earthdata_password):
+            if settings.earthdata_username and settings.earthdata_password:
+                earthdata_username = settings.earthdata_username.strip()
+                earthdata_password = settings.earthdata_password
+
         print(
             f"[ADV-ROUTE] credentials found={bool(credentials)} "
             f"user={earthdata_username} has_password={bool(earthdata_password)}",
@@ -246,3 +256,77 @@ def get_job_advanced_progress(
             "detail": "",
             "status": "running",
         }
+
+
+ADVANCED_EXPORT_FILES = (
+    "advanced_debug_report.json",
+    "advanced_ppp_filter_diagnostics.json",
+)
+
+
+def _advanced_job_root(job_id: int) -> Path:
+    return (
+        Path(__file__).resolve().parents[2]
+        / "storage"
+        / "processing"
+        / f"job_{job_id}_advanced"
+    )
+
+
+def advanced_rinex_export_name(marker: str | None, session_date: str | None) -> str:
+    """Nome RINEX 2 curto: SSSSDDD0.YYo (ex.: ADVB2320.26o)."""
+    code = "".join(ch for ch in (marker or "") if ch.isalnum()).upper()[:4] or "ADVB"
+    code = code.ljust(4, "0")
+    try:
+        d = date.fromisoformat(str(session_date or "")[:10])
+        return f"{code}{d.timetuple().tm_yday:03d}0.{d.year % 100:02d}o"
+    except ValueError:
+        return f"{code}.obs"
+
+
+def build_advanced_export_zip(job_root: Path, rinex_name: str) -> bytes | None:
+    results = job_root / "results"
+    obs_path = results / "ADVANCED_BASE.obs"
+    if not obs_path.is_file():
+        return None
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.write(obs_path, arcname=rinex_name)
+        for name in ADVANCED_EXPORT_FILES:
+            path = results / name
+            if path.is_file():
+                zf.write(path, arcname=f"relatorios/{name}")
+    return buffer.getvalue()
+
+
+@router.get("/{job_id}/export-advanced")
+def export_job_advanced(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    job = (
+        db.query(VRSJob)
+        .filter(VRSJob.id == job_id, VRSJob.user_id == current_user.id)
+        .first()
+    )
+    if not job:
+        raise HTTPException(status_code=404, detail="Job não encontrado.")
+
+    rinex_name = advanced_rinex_export_name(
+        getattr(job, "output_marker_name", None), getattr(job, "session_date", None)
+    )
+    payload = build_advanced_export_zip(_advanced_job_root(job_id), rinex_name)
+    if payload is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhum arquivo do modo avançado para este job. Processe o job primeiro.",
+        )
+
+    filename = f"job_{job_id}_avancado.zip"
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

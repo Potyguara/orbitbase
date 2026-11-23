@@ -14,9 +14,9 @@ def get_default_advanced_config() -> dict:
         "min_common_bases": 3,
         "min_satellites_per_epoch": 4,
         "receiver_brand": "ORBITBASE",
-        "receiver_model": "VIRTUAL_GNSS_ADV",
-        "receiver_version": "0.1-alpha",
-        "antenna_model": "VIRTUAL_ADV_ANT",
+        "receiver_model": "ORBITBASE VRS",
+        "receiver_version": "1.0",
+        "antenna_model": "VIRTUAL",
         "write_debug_json": True,
         "write_intermediate_files": True,
     }
