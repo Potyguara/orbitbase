@@ -30,6 +30,7 @@ class UnifiedProcessPayload(BaseModel):
     step_seconds: int = Field(default=1, ge=1, le=30)
     receiver_type: str | None = Field(default=None, max_length=40)
     receiver_number: str | None = Field(default=None, max_length=40)
+    receiver_version: str | None = Field(default=None, max_length=40)
     antenna_type: str | None = Field(default=None, max_length=40)
     antenna_number: str | None = Field(default=None, max_length=40)
 
@@ -62,6 +63,7 @@ def process_job_unified(
             end_time=payload.end_time,
             receiver_type=payload.receiver_type,
             receiver_number=payload.receiver_number,
+            receiver_version=payload.receiver_version,
             antenna_type=payload.antenna_type,
             antenna_number=payload.antenna_number,
         )

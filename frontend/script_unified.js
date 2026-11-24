@@ -225,7 +225,8 @@
   // (lembrados neste navegador)
   const RINEX_FIELDS = [
     { select: "unified-receiver", other: "unified-receiver-other", number: "unified-receiver-number",
-      typeKey: "ob_receiver_type", numberKey: "ob_receiver_number" },
+      typeKey: "ob_receiver_type", numberKey: "ob_receiver_number",
+      version: "unified-receiver-version", versionKey: "ob_receiver_version" },
     { select: "unified-antenna", other: "unified-antenna-other", number: "unified-antenna-number",
       typeKey: "ob_antenna_type", numberKey: "ob_antenna_number" },
   ];
@@ -236,13 +237,83 @@
     const num = document.getElementById(f.number);
     let type = sel ? sel.value : "";
     if (type === "__other") type = (other?.value || "").trim();
-    return { type: type || null, number: (num?.value || "").trim() || null };
+    const ver = f.version ? document.getElementById(f.version) : null;
+    return {
+      type: type || null,
+      number: (num?.value || "").trim() || null,
+      version: (ver?.value || "").trim() || null,
+    };
   }
 
   function receiverChoice() {
     const rec = fieldChoice(RINEX_FIELDS[0]);
     const ant = fieldChoice(RINEX_FIELDS[1]);
-    return { type: rec.type, number: rec.number, antennaType: ant.type, antennaNumber: ant.number };
+    return {
+      type: rec.type, number: rec.number, version: rec.version,
+      antennaType: ant.type, antennaNumber: ant.number,
+    };
+  }
+
+  // Cabeçalho ASCII do .tps (JPS/Topcon): rcv/id, rcv/sn, rcv/ver/main e o modelo.
+  function parseTpsHeader(text) {
+    const pick = (re) => { const m = text.match(re); return m ? m[1].trim() : ""; };
+    const id = pick(/rcv\/id="([^"]+)"/);
+    const sn = pick(/rcv\/sn="([^"]+)"/);
+    const fw = pick(/rcv\/ver\/main="([^"]+)"/);
+    let model = pick(/JPS\s+([A-Z0-9_\-]+)\s+Receiver Log File/i);
+    if (!model) model = pick(/rcv=\{[^,]+,([A-Z0-9_\-]+),/i);
+    const labelSerial = (sn.match(/([0-9]{3,}[-0-9]*)\s*$/) || [])[1] || "";
+    // firmware: só a versão e a família ("4.7 HSR"), sem a data
+    const firmware = fw.split(/\s+/).slice(0, 2).join(" ");
+    return { id, model: model.toUpperCase(), labelSerial, firmware };
+  }
+
+  function setSelectOrOther(selId, otherId, value) {
+    const sel = document.getElementById(selId);
+    const other = document.getElementById(otherId);
+    if (!sel || !value) return;
+    const known = Array.from(sel.options).some((o) => o.value === value || o.text === value);
+    if (known) sel.value = value;
+    else { sel.value = "__other"; if (other) other.value = value; }
+    sel.dispatchEvent(new Event("change"));
+  }
+
+  function setInput(id, value) {
+    const el = document.getElementById(id);
+    if (!el || !value) return;
+    el.value = value;
+    el.dispatchEvent(new Event("input"));
+  }
+
+  function setupTpsReader() {
+    const input = document.getElementById("unified-tps-file");
+    const status = document.getElementById("unified-tps-status");
+    if (!input) return;
+    input.addEventListener("change", async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      try {
+        const text = await file.slice(0, 65536).text();
+        const info = parseTpsHeader(text);
+        if (!info.id) {
+          if (status) status.textContent = "Não achei rcv/id no início deste arquivo.";
+          return;
+        }
+        setInput("unified-receiver-number", info.id);
+        setInput("unified-receiver-version", info.firmware);
+        if (info.model) {
+          setSelectOrOther("unified-receiver", "unified-receiver-other", `TPS ${info.model}`);
+          setSelectOrOther("unified-antenna", "unified-antenna-other", `TPS${info.model}`);
+        }
+        setInput("unified-antenna-number", info.labelSerial);
+        if (status) {
+          status.textContent = `Placa ${info.id}` + (info.model ? ` · ${info.model}` : "") +
+            (info.labelSerial ? ` · rótulo ${info.labelSerial}` : "");
+        }
+      } catch (err) {
+        if (status) status.textContent = "Não consegui ler o .tps.";
+      }
+    });
   }
 
   function setupField(f) {
@@ -265,11 +336,17 @@
     sel.addEventListener("change", sync);
     other?.addEventListener("input", sync);
     num?.addEventListener("input", () => store(f.numberKey, num.value.trim()));
+    const ver = f.version ? document.getElementById(f.version) : null;
+    if (ver) {
+      ver.value = load(f.versionKey);
+      ver.addEventListener("input", () => store(f.versionKey, ver.value.trim()));
+    }
     sync();
   }
 
   function setupReceiverField() {
     RINEX_FIELDS.forEach(setupField);
+    setupTpsReader();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", setupReceiverField);
@@ -297,7 +374,7 @@
           ...(() => {
             const c = receiverChoice();
             return {
-              receiver_type: c.type, receiver_number: c.number,
+              receiver_type: c.type, receiver_number: c.number, receiver_version: c.version,
               antenna_type: c.antennaType, antenna_number: c.antennaNumber,
             };
           })(),

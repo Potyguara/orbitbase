@@ -120,6 +120,10 @@
           <label class="ob-field">Receptor no RINEX
             <select id="unified-receiver">
               <option value="" selected>Padrão (ORBITBASE VRS)</option>
+              <option>TPS HIPER_SR</option>
+              <option>TPS HIPER_VR</option>
+              <option>TPS HIPER_HR</option>
+              <option>TPS HIPER_V</option>
               <option>TOPCON HIPER VR</option>
               <option>TOPCON HIPER V</option>
               <option>TOPCON HIPER SR</option>
@@ -141,8 +145,15 @@
             </select>
             <input id="unified-receiver-other" type="text" maxlength="20" placeholder="Modelo do receptor" class="hidden" />
           </label>
-          <label class="ob-field">Nº de série do receptor
-            <input id="unified-receiver-number" type="text" maxlength="20" placeholder="Opcional" />
+          <label class="ob-field">ID interno da placa (rcv/id)
+            <input id="unified-receiver-number" type="text" maxlength="20" placeholder="ex.: O0IZ4RS5R82" title="Vai em REC # do RINEX. É o rcv/id do .tps, o mesmo que o Topcon Tools mostra na coluna receptor (não é o serial do rótulo)." />
+          </label>
+          <label class="ob-field">Firmware do receptor
+            <input id="unified-receiver-version" type="text" maxlength="20" placeholder="Opcional" />
+          </label>
+          <label class="ob-field">Ler do arquivo .tps
+            <input id="unified-tps-file" type="file" accept=".tps,.TPS" />
+            <small id="unified-tps-status" class="ob-hint"></small>
           </label>
           <label class="ob-field">Antena no RINEX
             <select id="unified-antenna">
@@ -410,6 +421,6 @@
   </div>
 
   <script src="./script.js?v=505"></script>
-  <script src="./script_unified.js?v=4"></script>
+  <script src="./script_unified.js?v=5"></script>
 </body>
 </html>
