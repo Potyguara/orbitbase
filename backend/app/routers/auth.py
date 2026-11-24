@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.deps import get_current_user, get_db
 from app.models import User
 from app.schemas import MessageResponse, TokenResponse, UserCreate, UserLogin, UserRead
+from app.config import settings
 from app.security import create_access_token, hash_password, verify_password
 from app.services.billing import get_or_create_usage_record
 
@@ -14,6 +15,15 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
     "/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED
 )
 def register(payload: UserCreate, db: Session = Depends(get_db)):
+    if not settings.allow_self_registration:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "O cadastro pelo site está desativado. As contas são criadas pela "
+                "Amazonika Engenharia: solicite acesso ou uma cotação em contato.html."
+            ),
+        )
+
     existing = db.query(User).filter(User.email == payload.email.lower()).first()
     if existing:
         raise HTTPException(status_code=400, detail="E-mail já cadastrado.")
@@ -42,6 +52,11 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Credenciais inválidas.",
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Conta bloqueada. Fale com a Amazonika Engenharia.",
         )
 
     token = create_access_token(subject=str(user.id))

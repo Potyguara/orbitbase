@@ -87,6 +87,21 @@ BRANCH=main bash install.sh       # atualizar para a versão mais nova
 
 Dados persistentes: `deploy/data/db/orbitbase.db` (SQLite) e `deploy/data/storage/`.
 
+## Contas de usuário
+
+O cadastro pelo site está desligado: quem quer acesso usa a página "Solicitar cotação"
+(`contato.html`) e o administrador cria a conta na VPS. As contas que já existiam continuam valendo.
+
+```bash
+cd /opt/orbitbase/deploy
+docker compose exec backend python -m app.manage_users list
+docker compose exec -it backend python -m app.manage_users create --name "Fulano" --email fulano@exemplo.com   # pede a senha
+docker compose exec -it backend python -m app.manage_users set-password --email fulano@exemplo.com
+docker compose exec backend python -m app.manage_users deactivate --email fulano@exemplo.com   # bloqueia (activate desfaz)
+```
+
+`--plan free|pro|premium` escolhe o plano na criação. Para reabrir o autocadastro, `ALLOW_SELF_REGISTRATION=true` no `.env`.
+
 ## Rollback
 
 ```bash

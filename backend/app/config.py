@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     # Credenciais Earthdata padrão do servidor (usadas quando o usuário não cadastrou as suas).
     earthdata_username: str | None = None
     earthdata_password: str | None = None
+    # Autocadastro desligado: contas são criadas pelo administrador
+    # (python -m app.manage_users create ...). ALLOW_SELF_REGISTRATION=true reativa.
+    allow_self_registration: bool = False
     cors_origins: str = (
         "http://localhost:5500,http://127.0.0.1:5500,https://siscond.online"
     )
