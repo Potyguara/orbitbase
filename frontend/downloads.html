@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css?v=505" />
-  <link rel="stylesheet" href="./unified.css?v=5" />
+  <link rel="stylesheet" href="./unified.css?v=6" />
 </head>
 <body class="dashboard-body ob-unified">
 
@@ -69,13 +69,19 @@
         <div class="ob-card-head">
           <span class="ob-step">2</span>
           <div>
-            <h2>Efemérides transmitidas</h2>
-            <p>BRDC diário combinado do IGS, convertido para RINEX 2.11 (brdcDDD0.AAn e brdcDDD0.AAg).
+            <h2>Efemérides</h2>
+            <p>Transmitidas (rádio difusão): BRDC diário combinado do IGS, convertido para RINEX 2.11 (brdcDDD0.AAn e brdcDDD0.AAg).
                Se o IGS não tiver o dia, usamos a navegação de uma estação RBMC.</p>
           </div>
         </div>
         <label class="ob-check"><input id="dl-eph" type="checkbox" checked /> GPS (.n) e GLONASS (.g)</label>
         <label class="ob-check"><input id="dl-rnx3" type="checkbox" /> Incluir também o arquivo original misto RINEX 3 (_MN.rnx)</label>
+        <label class="ob-check"><input id="dl-sp3" type="checkbox" checked /> Órbita precisa (SP3) para o Topcon Tools mostrar órbita "Precisa"</label>
+        <p class="ob-hint">
+          Vem com o nome curto que o Topcon Tools aceita (ex.: <code>igs24384.sp3</code>). Primeiro tentamos a órbita
+          final (sai ~2 semanas depois do dia); antes disso, a rápida (sai no dia seguinte). A do CODE traz GPS + GLONASS;
+          a do IGS combinado traz só GPS. No Topcon Tools, importe o <code>.sp3</code> na obra junto com as observações e processe de novo.
+        </p>
       </section>
 
       <section class="ob-card">
@@ -124,6 +130,6 @@
     </p>
   </main>
 
-  <script src="./downloads.js?v=1"></script>
+  <script src="./downloads.js?v=2"></script>
 </body>
 </html>

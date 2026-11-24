@@ -31,6 +31,7 @@ class DownloadRequest(BaseModel):
     end_date: str | None = None
     ephemeris: bool = True
     include_rinex3: bool = False
+    precise: bool = False
     stations: list[str] = Field(default_factory=list)
     convert_hatanaka: bool = True
 
@@ -76,8 +77,8 @@ def create_download(
         raise HTTPException(status_code=400, detail=f"Código de estação inválido: {', '.join(bad)}")
     if len(stations) > MAX_STATIONS:
         raise HTTPException(status_code=400, detail=f"Escolha no máximo {MAX_STATIONS} estações.")
-    if not payload.ephemeris and not stations:
-        raise HTTPException(status_code=400, detail="Marque as efemérides ou escolha ao menos uma estação RBMC.")
+    if not payload.ephemeris and not payload.precise and not stations:
+        raise HTTPException(status_code=400, detail="Marque as efemérides, a órbita precisa ou escolha ao menos uma estação RBMC.")
     if len(days) * len(stations) > 62:
         raise HTTPException(
             status_code=400,
@@ -91,6 +92,7 @@ def create_download(
         include_rinex3=payload.include_rinex3,
         stations=stations,
         convert_hatanaka=payload.convert_hatanaka,
+        precise=payload.precise,
         earthdata_username=user,
         earthdata_password=password,
     )

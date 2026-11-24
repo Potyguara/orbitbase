@@ -91,6 +91,7 @@
       parts.push(days.length === 1 ? fmt(days[0]) : `${fmt(days[0])} a ${fmt(days[days.length - 1])}`);
     }
     if ($("dl-eph").checked) parts.push("efemérides GPS + GLONASS");
+    if ($("dl-sp3").checked) parts.push("órbita precisa (SP3)");
     if (selected.size) parts.push(`RBMC: ${[...selected].join(", ")}`);
     $("dl-summary").textContent = parts.join(" · ");
     $("dl-count").textContent = `${selected.size} de ${MAX_STATIONS}`;
@@ -226,8 +227,8 @@
     const start = $("dl-start").value;
     if (!start) return alertMsg("Informe a data inicial.");
     if (daysSelected().length > MAX_DAYS) return alertMsg(`Escolha no máximo ${MAX_DAYS} dias por vez.`);
-    if (!$("dl-eph").checked && !selected.size) {
-      return alertMsg("Marque as efemérides ou escolha ao menos uma estação RBMC.");
+    if (!$("dl-eph").checked && !$("dl-sp3").checked && !selected.size) {
+      return alertMsg("Marque as efemérides, a órbita precisa ou escolha ao menos uma estação RBMC.");
     }
     $("dl-submit").disabled = true;
     $("dl-save").hidden = true;
@@ -242,6 +243,7 @@
           end_date: $("dl-end").value || null,
           ephemeris: $("dl-eph").checked,
           include_rinex3: $("dl-rnx3").checked,
+          precise: $("dl-sp3").checked,
           stations: [...selected],
           convert_hatanaka: $("dl-crx").checked,
         }),
@@ -267,7 +269,7 @@
     $("dl-end").max = iso;
     $("dl-start").value = iso;
 
-    ["dl-start", "dl-end", "dl-eph"].forEach((id) => $(id).addEventListener("change", refreshSummary));
+    ["dl-start", "dl-end", "dl-eph", "dl-sp3"].forEach((id) => $(id).addEventListener("change", refreshSummary));
     $("dl-eph").addEventListener("change", () => { $("dl-rnx3").disabled = !$("dl-eph").checked; });
     $("dl-search").addEventListener("input", renderStations);
     $("dl-state").addEventListener("change", renderStations);

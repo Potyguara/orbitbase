@@ -196,3 +196,79 @@ def test_collect_rbmc_day_swaps_hatanaka_for_converted(monkeypatch, tmp_path):
     assert not notes
     raw, _ = dl.collect_rbmc_day("BRAZ", date(2026, 10, 1), False)
     assert sorted(p.name for p in raw) == ["braz2741.26d", "braz2741.26g", "braz2741.26n"]
+
+
+def _sp3_text(systems=("G01", "G02", "R01")):
+    sats = "".join(systems).ljust(51, " ")
+    return (
+        "#dP2026 10  1  0  0  0.00000000      96 ORBIT IGS20 FIT  COD\n"
+        "## 2438 345600.00000000   300.00000000 61314 0.0000000000000\n"
+        f"+  {len(systems):3d}   {sats}\n"
+        "+        " + "  0" * 17 + "\n"
+        "++         2  2  2\n"
+        "*  2026 10  1  0  0  0.00000000\n"
+        "PG01  15000.000000  20000.000000   5000.000000     10.000000\n"
+        "EOF\n"
+    )
+
+
+def test_precise_orbit_prefers_code_final_and_short_name(monkeypatch, tmp_path):
+    from app.services.vrs_advanced import advanced_ephemeris_service as eph
+
+    calls = []
+
+    def fake_download(url, dest, timeout_seconds=20, username=None, password=None):
+        calls.append(url)
+        dest.write_bytes(gzip.compress(_sp3_text().encode()))
+
+    monkeypatch.setattr(eph, "_download_file", fake_download)
+    day = date(2026, 10, 1)
+    assert dl.gps_week_day(day) == (2438, 4)
+    res = dl.ensure_daily_precise_orbit(day, tmp_path)
+    assert res["path"].endswith("cod24384.sp3")
+    assert res["product"] == "CODE final"
+    assert res["systems"] == ["G", "R"]
+    assert calls == ["https://ftp.aiub.unibe.ch/CODE/2026/COD0OPSFIN_20262740000_01D_05M_ORB.SP3.gz"]
+
+    calls.clear()
+    assert dl.ensure_daily_precise_orbit(day, tmp_path)["cached"] is True
+    assert not calls
+
+
+def test_precise_orbit_falls_back_to_igs_rapid_then_upgrades_to_final(monkeypatch, tmp_path):
+    from app.services.vrs_advanced import advanced_ephemeris_service as eph
+
+    final_out = {"yes": False}
+
+    def fake_download(url, dest, timeout_seconds=20, username=None, password=None):
+        if "aiub" in url:
+            raise eph.requests.ConnectionError("sem rede")
+        if "OPSFIN" in url and not final_out["yes"]:
+            raise eph.requests.HTTPError(response=type("R", (), {"status_code": 404})())
+        dest.write_bytes(gzip.compress(_sp3_text(("G01", "G02")).encode()))
+
+    monkeypatch.setattr(eph, "_download_file", fake_download)
+    day = date(2026, 10, 1)
+    rapid = dl.ensure_daily_precise_orbit(day, tmp_path)
+    assert rapid["path"].endswith("igr24384.sp3") and rapid["product"] == "IGS rápida"
+    assert rapid["systems"] == ["G"]
+
+    final_out["yes"] = True
+    final = dl.ensure_daily_precise_orbit(day, tmp_path)
+    assert final["path"].endswith("igs24384.sp3") and final["product"] == "IGS final"
+    assert not (tmp_path / "precise_products" / "2026-10-01" / "sp3_curto" / "igr24384.sp3").exists()
+
+
+def test_build_package_includes_precise_orbit(monkeypatch, tmp_path):
+    sp3 = tmp_path / "cod24384.sp3"
+    sp3.write_text(_sp3_text())
+    monkeypatch.setattr(dl, "ensure_daily_precise_orbit", lambda *a, **k: {
+        "path": str(sp3), "product": "CODE final", "systems": ["G", "R"],
+        "source_name": "COD0OPSFIN_20262740000_01D_05M_ORB.SP3.gz", "errors": []})
+    task = tmp_path / "task"
+    task.mkdir()
+    out = dl.build_package(task, tmp_path, [date(2026, 10, 1)], False, False, [], True, precise=True)
+    with zipfile.ZipFile(out) as zf:
+        assert "2026-10-01 (dia 274)/Orbita_precisa/cod24384.sp3" in zf.namelist()
+        readme = zf.read("LEIAME.txt").decode()
+    assert "GPS + GLONASS" in readme and "Topcon Tools" in readme

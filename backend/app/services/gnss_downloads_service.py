@@ -359,6 +359,153 @@ def ensure_daily_ephemeris(
 
 
 # --------------------------------------------------------------------------
+# Órbitas precisas (SP3)
+# --------------------------------------------------------------------------
+
+# (rótulo, prefixo do nome curto, nome longo, URL base, exige Earthdata).
+# Ordem: final antes de rápida; dentro de cada nível, CODE (GPS + GLONASS)
+# antes do IGS combinado (só GPS). {yyyy} {doy} {week} são preenchidos.
+SP3_PRODUCTS: list[tuple[str, str, str, str, bool]] = [
+    ("CODE final", "cod", "COD0OPSFIN_{yyyy}{doy}0000_01D_05M_ORB.SP3.gz",
+     "https://ftp.aiub.unibe.ch/CODE/{yyyy}/", False),
+    ("IGS final", "igs", "IGS0OPSFIN_{yyyy}{doy}0000_01D_15M_ORB.SP3.gz",
+     "https://igs.bkg.bund.de/root_ftp/IGS/products/{week}/", False),
+    ("IGS final", "igs", "IGS0OPSFIN_{yyyy}{doy}0000_01D_15M_ORB.SP3.gz",
+     "https://cddis.nasa.gov/archive/gnss/products/{week}/", True),
+    ("CODE rápida", "cor", "COD0OPSRAP_{yyyy}{doy}0000_01D_05M_ORB.SP3",
+     "https://ftp.aiub.unibe.ch/CODE/", False),
+    ("IGS rápida", "igr", "IGS0OPSRAP_{yyyy}{doy}0000_01D_15M_ORB.SP3.gz",
+     "https://igs.bkg.bund.de/root_ftp/IGS/products/{week}/", False),
+    ("IGS rápida", "igr", "IGS0OPSRAP_{yyyy}{doy}0000_01D_15M_ORB.SP3.gz",
+     "https://cddis.nasa.gov/archive/gnss/products/{week}/", True),
+]
+
+
+def gps_week_day(day: date) -> tuple[int, int]:
+    days = (day - date(1980, 1, 6)).days
+    return days // 7, days % 7
+
+
+def sp3_short_name(prefix: str, day: date) -> str:
+    """Nome curto clássico (aceito pelo Topcon Tools): igs24384.sp3."""
+    week, dow = gps_week_day(day)
+    return f"{prefix}{week}{dow}.sp3"
+
+
+def sp3_systems(path: Path) -> list[str]:
+    """Sistemas presentes no SP3 pelas linhas '+' do cabeçalho (G, R, E...)."""
+    found: list[str] = []
+    try:
+        with open(path, "r", encoding="ascii", errors="ignore") as fh:
+            for line in fh:
+                if line.startswith("* "):
+                    break
+                if line.startswith("+ ") or line.startswith("+\t"):
+                    for k in range(9, 60, 3):
+                        letter = line[k:k + 1]
+                        if letter.isalpha() and letter not in found:
+                            found.append(letter)
+    except OSError:
+        pass
+    return found
+
+
+def _decompress_to(raw_path: Path, dest: Path) -> None:
+    raw = raw_path.read_bytes()
+    if raw[:2] == b"\x1f\x8b":
+        dest.write_bytes(gzip.decompress(raw))
+    elif raw[:2] == b"\x1f\x9d":
+        from app.services.vrs_advanced.advanced_ephemeris_service import _decompress_Z_file
+
+        _decompress_Z_file(raw_path, dest)
+    else:
+        dest.write_bytes(raw)
+
+
+def ensure_daily_precise_orbit(
+    day: date,
+    storage_root: Path,
+    earthdata_username: str | None = None,
+    earthdata_password: str | None = None,
+) -> dict:
+    """Baixa o melhor SP3 disponível do dia e grava com o nome curto.
+
+    Cache em ``precise_products/<data>/sp3_curto``. Um SP3 final substitui um
+    rápido guardado antes, quando o final já foi publicado.
+    """
+    from app.services.vrs_advanced import advanced_ephemeris_service as eph
+
+    out_dir = storage_root / "precise_products" / day.isoformat() / "sp3_curto"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    meta_path = out_dir / "fonte.json"
+    meta: dict = {}
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+    cached = out_dir / meta.get("file", "-")
+    if cached.is_file() and "final" in meta.get("product", ""):
+        return {**meta, "path": str(cached), "errors": [], "cached": True}
+
+    week, _ = gps_week_day(day)
+    fields = {"yyyy": day.strftime("%Y"), "doy": day.strftime("%j"), "week": week}
+    has_login = bool(earthdata_username and earthdata_password)
+    errors: list[str] = []
+    dead_hosts: set[str] = set()
+
+    for label, prefix, name_tpl, base_tpl, needs_login in SP3_PRODUCTS:
+        if needs_login and not has_login:
+            continue
+        if cached.is_file() and "final" not in label:
+            # já temos uma rápida e o final ainda não saiu
+            return {**meta, "path": str(cached), "errors": errors, "cached": True}
+        url = base_tpl.format(**fields) + name_tpl.format(**fields)
+        host = eph._host_of(url)
+        if host in dead_hosts:
+            continue
+        tmp = out_dir / (name_tpl.format(**fields) + ".part")
+        final = out_dir / sp3_short_name(prefix, day)
+        try:
+            eph._download_file(
+                url, tmp,
+                username=earthdata_username if needs_login else None,
+                password=earthdata_password if needs_login else None,
+            )
+            if eph._looks_like_html_response(tmp):
+                raise eph.HtmlInsteadOfFileError(f"HTML em vez de SP3: {url}")
+            _decompress_to(tmp, final)
+            if not eph._looks_like_valid_sp3(final):
+                errors.append(f"Arquivo não é SP3 válido :: {url}")
+                final.unlink(missing_ok=True)
+                continue
+            systems = sp3_systems(final)
+            meta = {"file": final.name, "product": label, "source_name": name_tpl.format(**fields),
+                    "source_url": url, "systems": systems}
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+            if cached.is_file() and cached != final:
+                cached.unlink(missing_ok=True)
+            return {**meta, "path": str(final), "errors": errors, "cached": False}
+        except eph.HtmlInsteadOfFileError as exc:
+            dead_hosts.add(host)
+            errors.append(str(exc))
+        except eph.requests.HTTPError as exc:
+            code = exc.response.status_code if exc.response is not None else "?"
+            errors.append(f"HTTP {code} :: {url}")
+        except eph.requests.RequestException as exc:
+            dead_hosts.add(host)
+            errors.append(f"Sem conexão :: {url}")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Erro :: {url} :: {type(exc).__name__}: {exc}")
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    if cached.is_file():
+        return {**meta, "path": str(cached), "errors": errors, "cached": True}
+    return {"path": None, "errors": errors}
+
+
+# --------------------------------------------------------------------------
 # RBMC de um dia
 # --------------------------------------------------------------------------
 
@@ -451,8 +598,9 @@ def build_package(
     convert_hatanaka: bool,
     earthdata_username: str | None = None,
     earthdata_password: str | None = None,
+    precise: bool = False,
 ) -> Path:
-    total = len(days) * ((1 if ephemeris else 0) + len(stations)) or 1
+    total = len(days) * ((1 if ephemeris else 0) + (1 if precise else 0) + len(stations)) or 1
     done = 0
     log: list[str] = []
     entries: list[tuple[Path, str]] = []
@@ -487,6 +635,25 @@ def build_package(
                 log.append(f"{day.strftime('%d/%m/%Y')}: erro nas efemérides: {exc}")
             done += 1
 
+        if precise:
+            progress(f"{day.strftime('%d/%m/%Y')}: órbita precisa (SP3)")
+            try:
+                sp3 = ensure_daily_precise_orbit(day, storage_root, earthdata_username, earthdata_password)
+                if sp3.get("path"):
+                    raw = Path(sp3["path"])
+                    entries.append((raw, f"{folder}/Orbita_precisa/{raw.name}"))
+                    systems = sp3.get("systems") or []
+                    which = "GPS + GLONASS" if "R" in systems else "somente GPS"
+                    log.append(f"{day.strftime('%d/%m/%Y')} órbita precisa: {raw.name} "
+                               f"({sp3.get('product')}, {which}; original {sp3.get('source_name')})")
+                else:
+                    reason = _short(sp3["errors"][0]) if sp3.get("errors") else ""
+                    log.append(f"{day.strftime('%d/%m/%Y')}: órbita precisa ainda não publicada"
+                               + (f" ({reason})." if reason else "."))
+            except Exception as exc:  # noqa: BLE001
+                log.append(f"{day.strftime('%d/%m/%Y')}: erro na órbita precisa: {_short(exc)}")
+            done += 1
+
         for code in stations:
             progress(f"{day.strftime('%d/%m/%Y')}: RBMC {code}")
             try:
@@ -515,8 +682,13 @@ def build_package(
                 continue
             seen.add(arcname)
             zf.write(path, arcname=arcname)
-        zf.writestr("LEIAME.txt", "\r\n".join(
-            ["OrbitBase - downloads de efemérides e RBMC", ""] + log) + "\r\n")
+        readme = ["OrbitBase - downloads de efemérides e RBMC", ""] + log
+        if precise:
+            readme += ["", "Topcon Tools: importe o .sp3 da pasta Orbita_precisa na obra",
+                       "(Obra > Importar, tipo Efemérides precisas / SP3) e processe de novo.",
+                       "Órbita final sai ~2 semanas depois do dia; antes disso vem a rápida.",
+                       "O IGS combinado tem só GPS; o CODE tem GPS + GLONASS."]
+        zf.writestr("LEIAME.txt", "\r\n".join(readme) + "\r\n")
     tmp.replace(out)
     return out
 
@@ -531,6 +703,7 @@ def start_download_task(
     convert_hatanaka: bool,
     earthdata_username: str | None = None,
     earthdata_password: str | None = None,
+    precise: bool = False,
 ) -> str:
     root = tasks_root(storage_root, user_id)
     root.mkdir(parents=True, exist_ok=True)
@@ -546,6 +719,7 @@ def start_download_task(
             out = build_package(
                 task_dir, storage_root, days, ephemeris, include_rinex3, stations,
                 convert_hatanaka, earthdata_username, earthdata_password,
+                precise=precise,
             )
             status = read_status(task_dir) or {}
             _write_status(task_dir, status="done", percent=100, message="Pronto",

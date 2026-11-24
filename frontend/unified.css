@@ -181,3 +181,5 @@ a.ob-user-pill { text-decoration: none; transition: background .15s; }
 a.ob-user-pill:hover { background: rgba(255,255,255,.18); color: #fff; }
 a.ob-user-pill::after { content: " · Meu perfil"; color: #9fb3cf; }
 @media (max-width: 520px) { a.ob-user-pill::after { content: ""; } }
+.ob-hint { margin: 4px 0 0 24px; font-size: 13px; color: var(--ob-muted); line-height: 1.5; }
+.ob-hint code { background: #eef2f7; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
