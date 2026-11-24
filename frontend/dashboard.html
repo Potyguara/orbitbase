@@ -144,6 +144,30 @@
           <label class="ob-field">Nº de série do receptor
             <input id="unified-receiver-number" type="text" maxlength="20" placeholder="Opcional" />
           </label>
+          <label class="ob-field">Antena no RINEX
+            <select id="unified-antenna">
+              <option value="" selected>Padrão (VIRTUAL)</option>
+              <option>TPSHIPER_VR</option>
+              <option>TPSHIPER_V</option>
+              <option>TPSHIPER_SR</option>
+              <option>TPSHIPER_HR</option>
+              <option>TPSGR5</option>
+              <option>TRMR12</option>
+              <option>TRMR10</option>
+              <option>TRMR8S</option>
+              <option>LEIGS18</option>
+              <option>LEIGS16</option>
+              <option>CHCI73</option>
+              <option>CHCI90</option>
+              <option>EMLREACH_RS3</option>
+              <option>EMLREACH_RS2</option>
+              <option value="__other">Outra…</option>
+            </select>
+            <input id="unified-antenna-other" type="text" maxlength="20" placeholder="Código IGS da antena (ex.: TPSHIPER_SR NONE)" class="hidden" />
+          </label>
+          <label class="ob-field">Nº de série da antena
+            <input id="unified-antenna-number" type="text" maxlength="20" placeholder="Opcional" />
+          </label>
           <label class="ob-field">Duração (min)
             <input id="occupation-minutes" type="number" min="1" placeholder="Automático" readonly />
           </label>
@@ -386,6 +410,6 @@
   </div>
 
   <script src="./script.js?v=505"></script>
-  <script src="./script_unified.js?v=3"></script>
+  <script src="./script_unified.js?v=4"></script>
 </body>
 </html>

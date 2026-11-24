@@ -278,9 +278,13 @@ def test_receiver_header_choice_goes_to_rinex(tmp_path):
     )
     from app.services.vrs_unified.unified_service import receiver_header
 
-    assert receiver_header(None, None)["type"] == "ORBITBASE VRS"
-    rec = receiver_header("Topcon Hiper VR ç", "3487273")
-    assert rec == {"number": "3487273", "type": "TOPCON HIPER VR", "version": "ORBITBASE 1.0"}
+    default = receiver_header(None, None)
+    assert default["type"] == "ORBITBASE VRS" and default["number"] == "VRS"
+    assert default["antenna_type"] == "VIRTUAL"
+
+    rec = receiver_header("Topcon Hiper SR ç", "1234-5678", "TPSHIPER_SR", "ANT99")
+    assert rec["number"] == "1234-5678" and rec["type"] == "TOPCON HIPER SR"
+    assert rec["antenna_type"] == "TPSHIPER_SR     NONE" and rec["antenna_number"] == "ANT99"
 
     obs = {"C1": 2.1e7, "P1": 2.1e7, "L1": 1.1e8, "C2": 2.1e7, "P2": 2.1e7, "L2": 0.9e8}
     epochs = [{"epoch": "2026-08-20T11:00:00Z", "observations": [
@@ -288,7 +292,22 @@ def test_receiver_header_choice_goes_to_rinex(tmp_path):
     out = write_advanced_rinex_from_seed(
         str(tmp_path / "V.26o"), {"epochs": epochs}, receiver_number=rec["number"],
         receiver_model=rec["type"], receiver_version=rec["version"],
+        antenna_model=rec["antenna_type"], antenna_number=rec["antenna_number"],
         forced_obs_types=["C1", "P1", "L1", "C2", "P2", "L2"])
-    line = [l for l in open(out) if "REC # / TYPE / VERS" in l][0]
-    assert line.startswith("3487273".ljust(20) + "TOPCON HIPER VR".ljust(20) + "ORBITBASE 1.0".ljust(20))
-    assert "VIRTUAL REFERENCE STATION" in open(out).read()
+    text = open(out).read().splitlines()
+    rec_line = [l for l in text if "REC # / TYPE / VERS" in l][0]
+    ant_line = [l for l in text if "ANT # / TYPE" in l][0]
+    assert rec_line.startswith("1234-5678".ljust(20) + "TOPCON HIPER SR".ljust(20) + "ORBITBASE 1.0".ljust(20))
+    assert ant_line.startswith("ANT99".ljust(20) + "TPSHIPER_SR     NONE")
+    assert rec_line[60:].rstrip() == "REC # / TYPE / VERS" and ant_line[60:].rstrip() == "ANT # / TYPE"
+    assert any("VIRTUAL REFERENCE STATION" in l for l in text)
+
+
+def test_serial_alone_is_written_and_antenna_radome_kept():
+    from app.services.vrs_unified.unified_service import antenna_type_field, receiver_header
+
+    rec = receiver_header("", "O1FGEMOTEZ6")
+    assert rec["number"] == "O1FGEMOTEZ6" and rec["type"] == "ORBITBASE VRS"
+    assert antenna_type_field("leiGS18 leit") == "LEIGS18         LEIT"
+    assert antenna_type_field("Hiper SR") == "HIPER_SR        NONE"
+    assert antenna_type_field("") == ""
