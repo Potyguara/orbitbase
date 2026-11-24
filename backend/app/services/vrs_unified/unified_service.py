@@ -454,6 +454,7 @@ def process_unified_vrs(
     receiver_number: str | None = None,
     antenna_type: str | None = None,
     antenna_number: str | None = None,
+    receiver_version: str | None = None,
 ) -> dict:
     """Gera a base VRS na janela exata pedida.
 
@@ -489,7 +490,9 @@ def process_unified_vrs(
         return _finish_unified(
             job, results_dir, epochs, skipped, target_xyz, start_local, end_local,
             start_utc, end_utc, step_seconds, {"network_mode": "master", **info},
-            receiver=receiver_header(receiver_type, receiver_number, antenna_type, antenna_number),
+            receiver=receiver_header(
+                receiver_type, receiver_number, antenna_type, antenna_number, receiver_version
+            ),
         )
 
     _write_progress(results_dir, 5, "basic", "Gerando observações de rede (motor básico)")
@@ -543,7 +546,9 @@ def process_unified_vrs(
     return _finish_unified(
         job, results_dir, epochs, skipped, target_xyz, start_local, end_local,
         start_utc, end_utc, step_seconds,
-        receiver=receiver_header(receiver_type, receiver_number, antenna_type, antenna_number),
+        receiver=receiver_header(
+                receiver_type, receiver_number, antenna_type, antenna_number, receiver_version
+            ),
         extra={
             "network_mode": "basic",
             "requested_epochs": len(grid),
@@ -627,21 +632,25 @@ def receiver_header(
     receiver_number: str | None,
     antenna_type: str | None = None,
     antenna_number: str | None = None,
+    receiver_version: str | None = None,
 ) -> dict:
     """Campos REC # / TYPE / VERS e ANT # / TYPE (RINEX: 20 colunas ASCII cada).
 
     O que o usuário informar vai para o cabeçalho; o que ficar em branco
     mantém o padrão da VRS (número "VRS", tipo "ORBITBASE VRS", antena "VIRTUAL").
-    O nº de série é gravado mesmo quando o modelo do receptor fica no padrão.
+    REC # recebe o ID interno da placa (rcv/id do .tps, ex.: O0IZ4RS5R82), que é
+    o que o Topcon Tools usa para identificar o receptor; ele é gravado mesmo
+    quando o modelo do receptor fica no padrão.
     """
     rtype = _rinex_text(receiver_type)
     rnumber = _rinex_text(receiver_number)
+    rversion = _rinex_text(receiver_version)
     atype = antenna_type_field(antenna_type)
     anumber = _rinex_text(antenna_number)
     return {
         "number": rnumber or "VRS",
         "type": rtype or "ORBITBASE VRS",
-        "version": "ORBITBASE 1.0" if rtype else "1.0",
+        "version": rversion or ("ORBITBASE 1.0" if rtype else "1.0"),
         "antenna_number": anumber or "VRS",
         "antenna_type": atype or "VIRTUAL",
     }

@@ -311,3 +311,28 @@ def test_serial_alone_is_written_and_antenna_radome_kept():
     assert antenna_type_field("leiGS18 leit") == "LEIGS18         LEIT"
     assert antenna_type_field("Hiper SR") == "HIPER_SR        NONE"
     assert antenna_type_field("") == ""
+
+
+def test_board_id_from_tps_goes_to_rec_number(tmp_path):
+    """REC # recebe o ID interno da placa (rcv/id), que o Topcon Tools mostra como receptor."""
+    from app.services.vrs_advanced.advanced_rinex_writer_service import (
+        write_advanced_rinex_from_seed,
+    )
+    from app.services.vrs_unified.unified_service import receiver_header
+
+    rec = receiver_header("TPS HIPER_SR", "O0IZ4RS5R82", "TPSHIPER_SR", "1064-12234", "4.7 HSR")
+    assert rec["number"] == "O0IZ4RS5R82" and rec["version"] == "4.7 HSR"
+
+    obs = {"C1": 2.1e7, "P1": 2.1e7, "L1": 1.1e8, "C2": 2.1e7, "P2": 2.1e7, "L2": 0.9e8}
+    epochs = [{"epoch": "2026-10-01T12:36:25Z", "observations": [
+        {"satellite": s, **obs} for s in ("G05", "G10", "G12", "G13")]}]
+    out = write_advanced_rinex_from_seed(
+        str(tmp_path / "P13.26o"), {"epochs": epochs}, receiver_number=rec["number"],
+        receiver_model=rec["type"], receiver_version=rec["version"],
+        antenna_model=rec["antenna_type"], antenna_number=rec["antenna_number"],
+        forced_obs_types=["C1", "P1", "L1", "C2", "P2", "L2"])
+    text = open(out).read().splitlines()
+    rec_line = [l for l in text if "REC # / TYPE / VERS" in l][0]
+    ant_line = [l for l in text if "ANT # / TYPE" in l][0]
+    assert rec_line[:60] == "O0IZ4RS5R82".ljust(20) + "TPS HIPER_SR".ljust(20) + "4.7 HSR".ljust(20)
+    assert ant_line[:40] == "1064-12234".ljust(20) + "TPSHIPER_SR     NONE"

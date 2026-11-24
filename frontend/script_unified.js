@@ -225,7 +225,8 @@
   // (lembrados neste navegador)
   const RINEX_FIELDS = [
     { select: "unified-receiver", other: "unified-receiver-other", number: "unified-receiver-number",
-      typeKey: "ob_receiver_type", numberKey: "ob_receiver_number" },
+      typeKey: "ob_receiver_type", numberKey: "ob_receiver_number",
+      version: "unified-receiver-version", versionKey: "ob_receiver_version" },
     { select: "unified-antenna", other: "unified-antenna-other", number: "unified-antenna-number",
       typeKey: "ob_antenna_type", numberKey: "ob_antenna_number" },
   ];
@@ -236,13 +237,90 @@
     const num = document.getElementById(f.number);
     let type = sel ? sel.value : "";
     if (type === "__other") type = (other?.value || "").trim();
-    return { type: type || null, number: (num?.value || "").trim() || null };
+    const ver = f.version ? document.getElementById(f.version) : null;
+    return {
+      type: type || null,
+      number: (num?.value || "").trim() || null,
+      version: (ver?.value || "").trim() || null,
+    };
   }
 
   function receiverChoice() {
     const rec = fieldChoice(RINEX_FIELDS[0]);
     const ant = fieldChoice(RINEX_FIELDS[1]);
-    return { type: rec.type, number: rec.number, antennaType: ant.type, antennaNumber: ant.number };
+    return {
+      type: rec.type, number: rec.number, version: rec.version,
+      antennaType: ant.type, antennaNumber: ant.number,
+    };
+  }
+
+  // Cabeçalho ASCII do .tps (JPS/Topcon): rcv/id, rcv/sn, rcv/ver/main e o modelo.
+  function parseTpsHeader(text) {
+    const pick = (re) => { const m = text.match(re); return m ? m[1].trim() : ""; };
+    const id = pick(/rcv\/id="([^"]+)"/);
+    const sn = pick(/rcv\/sn="([^"]+)"/);
+    const fw = pick(/rcv\/ver\/main="([^"]+)"/);
+    let model = pick(/JPS\s+([A-Z0-9_\-]+)\s+Receiver Log File/i);
+    if (!model) model = pick(/rcv=\{[^,]+,([A-Z0-9_\-]+),/i);
+    const labelSerial = (sn.match(/([0-9]{3,}[-0-9]*)\s*$/) || [])[1] || "";
+    // firmware: só a versão e a família ("4.7 HSR"), sem a data
+    const firmware = fw.split(/\s+/).slice(0, 2).join(" ");
+    return { id, model: model.toUpperCase(), labelSerial, firmware };
+  }
+
+  function setSelectOrOther(selId, otherId, value) {
+    const sel = document.getElementById(selId);
+    const other = document.getElementById(otherId);
+    if (!sel || !value) return;
+    const known = Array.from(sel.options).some((o) => o.value === value || o.text === value);
+    if (known) sel.value = value;
+    else { sel.value = "__other"; if (other) other.value = value; }
+    sel.dispatchEvent(new Event("change"));
+  }
+
+  function setInput(id, value) {
+    const el = document.getElementById(id);
+    if (!el || !value) return;
+    el.value = value;
+    el.dispatchEvent(new Event("input"));
+  }
+
+  function setupTpsReader() {
+    const input = document.getElementById("unified-tps-file");
+    const status = document.getElementById("unified-tps-status");
+    if (!input) return;
+    input.addEventListener("change", async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      try {
+        const text = await file.slice(0, 65536).text();
+        const info = parseTpsHeader(text);
+        if (!info.id) {
+          if (status) status.textContent = "Não achei rcv/id no início deste arquivo.";
+          return;
+        }
+        setInput("unified-receiver-number", info.id);
+        setInput("unified-receiver-version", info.firmware);
+        if (info.model) {
+          setSelectOrOther("unified-receiver", "unified-receiver-other", `TPS ${info.model}`);
+          setSelectOrOther("unified-antenna", "unified-antenna-other", `TPS${info.model}`);
+        }
+        setInput("unified-antenna-number", info.labelSerial);
+        if (status) {
+          status.textContent = `Placa ${info.id}` + (info.model ? ` · ${info.model}` : "") +
+            (info.labelSerial ? ` · rótulo ${info.labelSerial}` : "");
+        }
+        const nameEl = document.getElementById("unified-equipment-name");
+        if (nameEl && !nameEl.value && info.model) {
+          nameEl.value = `${info.model.replace(/_/g, " ")} ${info.labelSerial || info.id}`.trim();
+        }
+        const eqSel = document.getElementById("unified-equipment");
+        if (eqSel) eqSel.value = "";
+        equipmentStatus("Lido do .tps. Clique em Salvar equipamento para não precisar do arquivo de novo.");
+      } catch (err) {
+        if (status) status.textContent = "Não consegui ler o .tps.";
+      }
+    });
   }
 
   function setupField(f) {
@@ -265,11 +343,122 @@
     sel.addEventListener("change", sync);
     other?.addEventListener("input", sync);
     num?.addEventListener("input", () => store(f.numberKey, num.value.trim()));
+    const ver = f.version ? document.getElementById(f.version) : null;
+    if (ver) {
+      ver.value = load(f.versionKey);
+      ver.addEventListener("input", () => store(f.versionKey, ver.value.trim()));
+    }
     sync();
+  }
+
+  // "Meus equipamentos": receptores salvos no perfil, escolhidos no seletor
+  let equipmentList = [];
+
+  function equipmentStatus(text) {
+    const el = document.getElementById("unified-equipment-status");
+    if (el) el.textContent = text || "";
+  }
+
+  function fillFromEquipment(eq) {
+    const setSel = (selId, otherId, value) => {
+      if (value) { setSelectOrOther(selId, otherId, value); return; }
+      const sel = document.getElementById(selId);
+      if (sel) { sel.value = ""; sel.dispatchEvent(new Event("change")); }
+    };
+    const setVal = (id, value) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = value || "";
+      el.dispatchEvent(new Event("input"));
+    };
+    setSel("unified-receiver", "unified-receiver-other", eq.receiver_type);
+    setVal("unified-receiver-number", eq.board_id);
+    setVal("unified-receiver-version", eq.firmware);
+    setSel("unified-antenna", "unified-antenna-other", eq.antenna_type);
+    setVal("unified-antenna-number", eq.antenna_serial);
+    setVal("unified-equipment-name", eq.name);
+  }
+
+  function renderEquipment(selectedId) {
+    const sel = document.getElementById("unified-equipment");
+    if (!sel) return;
+    sel.innerHTML = '<option value="">Preencher à mão</option>';
+    equipmentList.forEach((eq) => {
+      const opt = document.createElement("option");
+      opt.value = String(eq.id);
+      opt.textContent = eq.board_id ? `${eq.name} · ${eq.board_id}` : eq.name;
+      sel.appendChild(opt);
+    });
+    sel.value = selectedId ? String(selectedId) : "";
+    document.getElementById("unified-equipment-delete")?.classList.toggle("hidden", !sel.value);
+  }
+
+  async function loadEquipment(selectedId) {
+    try {
+      const res = await fetch(`${API}/users/me/equipment`, { headers: headers() });
+      if (!res.ok) return;
+      equipmentList = await res.json();
+      let saved = "";
+      try { saved = localStorage.getItem("ob_equipment_id") || ""; } catch (_) {}
+      const pick = selectedId || saved;
+      renderEquipment(equipmentList.some((e) => String(e.id) === String(pick)) ? pick : "");
+    } catch (_) {}
+  }
+
+  function setupEquipment() {
+    const sel = document.getElementById("unified-equipment");
+    if (!sel) return;
+    sel.addEventListener("change", () => {
+      try { localStorage.setItem("ob_equipment_id", sel.value); } catch (_) {}
+      document.getElementById("unified-equipment-delete")?.classList.toggle("hidden", !sel.value);
+      const eq = equipmentList.find((e) => String(e.id) === sel.value);
+      if (eq) { fillFromEquipment(eq); equipmentStatus(""); }
+    });
+
+    document.getElementById("unified-equipment-save")?.addEventListener("click", async () => {
+      const c = receiverChoice();
+      const nameEl = document.getElementById("unified-equipment-name");
+      const name = (nameEl?.value || "").trim() ||
+        [c.type, c.antennaNumber || c.number].filter(Boolean).join(" ");
+      if (!name) { equipmentStatus("Dê um apelido ou preencha o receptor."); return; }
+      const body = {
+        name, receiver_type: c.type, board_id: c.number, firmware: c.version,
+        antenna_type: c.antennaType, antenna_serial: c.antennaNumber,
+      };
+      const current = equipmentList.find((e) => String(e.id) === sel.value);
+      const sameName = current && current.name === name;
+      const url = sameName ? `${API}/users/me/equipment/${current.id}` : `${API}/users/me/equipment`;
+      try {
+        const res = await fetch(url, {
+          method: sameName ? "PUT" : "POST", headers: headers(true), body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { equipmentStatus(data?.detail || "Não consegui salvar."); return; }
+        try { localStorage.setItem("ob_equipment_id", String(data.id)); } catch (_) {}
+        await loadEquipment(data.id);
+        equipmentStatus(sameName ? "Equipamento atualizado." : "Equipamento salvo.");
+      } catch (_) { equipmentStatus("Não consegui salvar."); }
+    });
+
+    document.getElementById("unified-equipment-delete")?.addEventListener("click", async () => {
+      const id = sel.value;
+      if (!id) return;
+      try {
+        const res = await fetch(`${API}/users/me/equipment/${id}`, { method: "DELETE", headers: headers() });
+        if (!res.ok) { equipmentStatus("Não consegui excluir."); return; }
+        try { localStorage.removeItem("ob_equipment_id"); } catch (_) {}
+        await loadEquipment("");
+        equipmentStatus("Equipamento excluído.");
+      } catch (_) { equipmentStatus("Não consegui excluir."); }
+    });
+
+    loadEquipment();
   }
 
   function setupReceiverField() {
     RINEX_FIELDS.forEach(setupField);
+    setupTpsReader();
+    setupEquipment();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", setupReceiverField);
@@ -297,7 +486,7 @@
           ...(() => {
             const c = receiverChoice();
             return {
-              receiver_type: c.type, receiver_number: c.number,
+              receiver_type: c.type, receiver_number: c.number, receiver_version: c.version,
               antenna_type: c.antennaType, antenna_number: c.antennaNumber,
             };
           })(),
