@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css?v=505" />
-  <link rel="stylesheet" href="./unified.css?v=6" />
+  <link rel="stylesheet" href="./unified.css?v=7" />
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -118,80 +118,93 @@
               <option value="30">30 s</option>
             </select>
           </label>
-          <label class="ob-field">Meu equipamento
+          <div class="ob-field ob-span-2">Receptor no RINEX
             <select id="unified-equipment">
-              <option value="">Preencher à mão</option>
+              <option value="">Padrão VRS (sem receptor)</option>
             </select>
-            <small class="ob-hint">Cadastre uma vez e depois só escolha aqui.</small>
-          </label>
-          <div class="ob-field ob-field-btn">
-            <input id="unified-equipment-name" type="text" maxlength="80" placeholder="Apelido (ex.: HiPer SR 1064-12234)" />
-            <button id="unified-equipment-save" type="button" class="ob-btn ob-btn-ghost">Salvar equipamento</button>
-            <button id="unified-equipment-delete" type="button" class="ob-btn ob-btn-ghost hidden">Excluir</button>
-            <small id="unified-equipment-status" class="ob-hint"></small>
+            <small id="unified-equipment-summary" class="ob-hint"></small>
+            <button id="unified-equipment-manage" type="button" class="ob-link">Cadastrar ou editar equipamentos</button>
           </div>
-          <label class="ob-field">Receptor no RINEX
-            <select id="unified-receiver">
-              <option value="" selected>Padrão (ORBITBASE VRS)</option>
-              <option>TPS HIPER_SR</option>
-              <option>TPS HIPER_VR</option>
-              <option>TPS HIPER_HR</option>
-              <option>TPS HIPER_V</option>
-              <option>TOPCON HIPER VR</option>
-              <option>TOPCON HIPER V</option>
-              <option>TOPCON HIPER SR</option>
-              <option>TOPCON HIPER HR</option>
-              <option>TOPCON GR-5</option>
-              <option>TRIMBLE R12</option>
-              <option>TRIMBLE R10</option>
-              <option>TRIMBLE R8S</option>
-              <option>LEICA GS18</option>
-              <option>LEICA GS16</option>
-              <option>CHC I73</option>
-              <option>CHC I90</option>
-              <option>EMLID REACH RS3</option>
-              <option>EMLID REACH RS2</option>
-              <option>SOUTH GALAXY G1</option>
-              <option>COMNAV T300</option>
-              <option>STONEX S900</option>
-              <option value="__other">Outro…</option>
-            </select>
-            <input id="unified-receiver-other" type="text" maxlength="20" placeholder="Modelo do receptor" class="hidden" />
-          </label>
-          <label class="ob-field">ID interno da placa (rcv/id)
-            <input id="unified-receiver-number" type="text" maxlength="20" placeholder="ex.: O0IZ4RS5R82" title="Vai em REC # do RINEX. É o rcv/id do .tps, o mesmo que o Topcon Tools mostra na coluna receptor (não é o serial do rótulo)." />
-          </label>
-          <label class="ob-field">Firmware do receptor
-            <input id="unified-receiver-version" type="text" maxlength="20" placeholder="Opcional" />
-          </label>
-          <label class="ob-field">Ler do arquivo .tps
-            <input id="unified-tps-file" type="file" accept=".tps,.TPS" />
-            <small id="unified-tps-status" class="ob-hint"></small>
-          </label>
-          <label class="ob-field">Antena no RINEX
-            <select id="unified-antenna">
-              <option value="" selected>Padrão (VIRTUAL)</option>
-              <option>TPSHIPER_VR</option>
-              <option>TPSHIPER_V</option>
-              <option>TPSHIPER_SR</option>
-              <option>TPSHIPER_HR</option>
-              <option>TPSGR5</option>
-              <option>TRMR12</option>
-              <option>TRMR10</option>
-              <option>TRMR8S</option>
-              <option>LEIGS18</option>
-              <option>LEIGS16</option>
-              <option>CHCI73</option>
-              <option>CHCI90</option>
-              <option>EMLREACH_RS3</option>
-              <option>EMLREACH_RS2</option>
-              <option value="__other">Outra…</option>
-            </select>
-            <input id="unified-antenna-other" type="text" maxlength="20" placeholder="Código IGS da antena (ex.: TPSHIPER_SR NONE)" class="hidden" />
-          </label>
-          <label class="ob-field">Nº de série da antena
-            <input id="unified-antenna-number" type="text" maxlength="20" placeholder="Opcional" />
-          </label>
+          <div id="unified-equipment-panel" class="ob-equip-panel hidden">
+            <div class="ob-equip-head">
+              <strong id="unified-equipment-title">Novo equipamento</strong>
+              <button id="unified-equipment-close" type="button" class="ob-link">Fechar</button>
+            </div>
+            <p class="ob-hint">Preencha uma vez. Depois basta escolher o equipamento acima ao gerar a base.</p>
+            <div class="ob-grid">
+              <label class="ob-field ob-span-2">Apelido
+                <input id="unified-equipment-name" type="text" maxlength="80" placeholder="ex.: HiPer SR 1064-12234" />
+              </label>
+              <label class="ob-field ob-span-2">Ler do arquivo .tps (opcional)
+                <input id="unified-tps-file" type="file" accept=".tps,.TPS" />
+                <small id="unified-tps-status" class="ob-hint"></small>
+              </label>
+              <label class="ob-field">Modelo do receptor
+                <select id="unified-receiver">
+                  <option value="" selected>Escolha o modelo</option>
+                  <option>TPS HIPER_SR</option>
+                  <option>TPS HIPER_VR</option>
+                  <option>TPS HIPER_HR</option>
+                  <option>TPS HIPER_V</option>
+                  <option>TOPCON HIPER VR</option>
+                  <option>TOPCON HIPER V</option>
+                  <option>TOPCON HIPER SR</option>
+                  <option>TOPCON HIPER HR</option>
+                  <option>TOPCON GR-5</option>
+                  <option>TRIMBLE R12</option>
+                  <option>TRIMBLE R10</option>
+                  <option>TRIMBLE R8S</option>
+                  <option>LEICA GS18</option>
+                  <option>LEICA GS16</option>
+                  <option>CHC I73</option>
+                  <option>CHC I90</option>
+                  <option>EMLID REACH RS3</option>
+                  <option>EMLID REACH RS2</option>
+                  <option>SOUTH GALAXY G1</option>
+                  <option>COMNAV T300</option>
+                  <option>STONEX S900</option>
+                  <option value="__other">Outro…</option>
+                </select>
+                <input id="unified-receiver-other" type="text" maxlength="20" placeholder="Modelo do receptor" class="hidden" />
+              </label>
+              <label class="ob-field">ID interno da placa (rcv/id)
+                <input id="unified-receiver-number" type="text" maxlength="20" placeholder="ex.: O0IZ4RS5R82" title="Vai em REC # do RINEX. É o rcv/id do .tps, o mesmo que o Topcon Tools mostra na coluna receptor (não é o serial do rótulo)." />
+              </label>
+              <label class="ob-field">Firmware do receptor
+                <input id="unified-receiver-version" type="text" maxlength="20" placeholder="Opcional" />
+              </label>
+              <label class="ob-field">Antena
+                <select id="unified-antenna">
+                  <option value="" selected>Sem antena (VIRTUAL)</option>
+                  <option>TPSHIPER_VR</option>
+                  <option>TPSHIPER_V</option>
+                  <option>TPSHIPER_SR</option>
+                  <option>TPSHIPER_HR</option>
+                  <option>TPSGR5</option>
+                  <option>TRMR12</option>
+                  <option>TRMR10</option>
+                  <option>TRMR8S</option>
+                  <option>LEIGS18</option>
+                  <option>LEIGS16</option>
+                  <option>CHCI73</option>
+                  <option>CHCI90</option>
+                  <option>EMLREACH_RS3</option>
+                  <option>EMLREACH_RS2</option>
+                  <option value="__other">Outra…</option>
+                </select>
+                <input id="unified-antenna-other" type="text" maxlength="20" placeholder="Código IGS da antena (ex.: TPSHIPER_SR NONE)" class="hidden" />
+              </label>
+              <label class="ob-field">Nº de série da antena
+                <input id="unified-antenna-number" type="text" maxlength="20" placeholder="Opcional" />
+              </label>
+            </div>
+            <div class="ob-equip-actions">
+              <small id="unified-equipment-status" class="ob-hint"></small>
+              <button id="unified-equipment-delete" type="button" class="ob-btn ob-btn-ghost hidden">Excluir</button>
+              <button id="unified-equipment-save-new" type="button" class="ob-btn ob-btn-ghost hidden">Salvar como novo</button>
+              <button id="unified-equipment-save" type="button" class="ob-btn ob-btn-primary">Salvar equipamento</button>
+            </div>
+          </div>
           <label class="ob-field">Duração (min)
             <input id="occupation-minutes" type="number" min="1" placeholder="Automático" readonly />
           </label>
@@ -435,6 +448,6 @@
   </div>
 
   <script src="./script.js?v=505"></script>
-  <script src="./script_unified.js?v=6"></script>
+  <script src="./script_unified.js?v=7"></script>
 </body>
 </html>

@@ -221,37 +221,41 @@
     } catch (_) {}
   }
 
-  // receptor e antena gravados em REC # / TYPE / VERS e ANT # / TYPE do RINEX
-  // (lembrados neste navegador)
-  const RINEX_FIELDS = [
-    { select: "unified-receiver", other: "unified-receiver-other", number: "unified-receiver-number",
-      typeKey: "ob_receiver_type", numberKey: "ob_receiver_number",
-      version: "unified-receiver-version", versionKey: "ob_receiver_version" },
-    { select: "unified-antenna", other: "unified-antenna-other", number: "unified-antenna-number",
-      typeKey: "ob_antenna_type", numberKey: "ob_antenna_number" },
-  ];
+  // Receptor no RINEX: o usuário escolhe um equipamento salvo no perfil
+  // (Meus equipamentos). O RINEX recebe exatamente o que está no cadastro:
+  // REC # = ID interno da placa, TYPE, firmware; ANT # / TYPE = serial e antena.
+  let equipmentList = [];
 
-  function fieldChoice(f) {
-    const sel = document.getElementById(f.select);
-    const other = document.getElementById(f.other);
-    const num = document.getElementById(f.number);
-    let type = sel ? sel.value : "";
-    if (type === "__other") type = (other?.value || "").trim();
-    const ver = f.version ? document.getElementById(f.version) : null;
-    return {
-      type: type || null,
-      number: (num?.value || "").trim() || null,
-      version: (ver?.value || "").trim() || null,
-    };
+  const $ = (id) => document.getElementById(id);
+
+  function selectedEquipment() {
+    const id = $("unified-equipment")?.value || "";
+    return equipmentList.find((e) => String(e.id) === id) || null;
   }
 
   function receiverChoice() {
-    const rec = fieldChoice(RINEX_FIELDS[0]);
-    const ant = fieldChoice(RINEX_FIELDS[1]);
+    const eq = selectedEquipment();
+    if (!eq) return { type: null, number: null, version: null, antennaType: null, antennaNumber: null };
     return {
-      type: rec.type, number: rec.number, version: rec.version,
-      antennaType: ant.type, antennaNumber: ant.number,
+      type: eq.receiver_type || null, number: eq.board_id || null, version: eq.firmware || null,
+      antennaType: eq.antenna_type || null, antennaNumber: eq.antenna_serial || null,
     };
+  }
+
+  function equipmentSummary(eq) {
+    if (!eq) return "O RINEX sai como VRS genérica (REC # VRS, antena VIRTUAL).";
+    const parts = [
+      eq.receiver_type || "modelo não informado",
+      eq.board_id ? `placa ${eq.board_id}` : "sem ID da placa",
+      eq.firmware ? `firmware ${eq.firmware}` : null,
+      eq.antenna_type ? `antena ${eq.antenna_type}` : "antena VIRTUAL",
+    ];
+    return parts.filter(Boolean).join(" · ");
+  }
+
+  function showSummary() {
+    const el = $("unified-equipment-summary");
+    if (el) el.textContent = equipmentSummary(selectedEquipment());
   }
 
   // Cabeçalho ASCII do .tps (JPS/Topcon): rcv/id, rcv/sn, rcv/ver/main e o modelo.
@@ -269,196 +273,175 @@
   }
 
   function setSelectOrOther(selId, otherId, value) {
-    const sel = document.getElementById(selId);
-    const other = document.getElementById(otherId);
-    if (!sel || !value) return;
-    const known = Array.from(sel.options).some((o) => o.value === value || o.text === value);
-    if (known) sel.value = value;
-    else { sel.value = "__other"; if (other) other.value = value; }
-    sel.dispatchEvent(new Event("change"));
-  }
-
-  function setInput(id, value) {
-    const el = document.getElementById(id);
-    if (!el || !value) return;
-    el.value = value;
-    el.dispatchEvent(new Event("input"));
-  }
-
-  function setupTpsReader() {
-    const input = document.getElementById("unified-tps-file");
-    const status = document.getElementById("unified-tps-status");
-    if (!input) return;
-    input.addEventListener("change", async () => {
-      const file = input.files && input.files[0];
-      if (!file) return;
-      try {
-        const text = await file.slice(0, 65536).text();
-        const info = parseTpsHeader(text);
-        if (!info.id) {
-          if (status) status.textContent = "Não achei rcv/id no início deste arquivo.";
-          return;
-        }
-        setInput("unified-receiver-number", info.id);
-        setInput("unified-receiver-version", info.firmware);
-        if (info.model) {
-          setSelectOrOther("unified-receiver", "unified-receiver-other", `TPS ${info.model}`);
-          setSelectOrOther("unified-antenna", "unified-antenna-other", `TPS${info.model}`);
-        }
-        setInput("unified-antenna-number", info.labelSerial);
-        if (status) {
-          status.textContent = `Placa ${info.id}` + (info.model ? ` · ${info.model}` : "") +
-            (info.labelSerial ? ` · rótulo ${info.labelSerial}` : "");
-        }
-        const nameEl = document.getElementById("unified-equipment-name");
-        if (nameEl && !nameEl.value && info.model) {
-          nameEl.value = `${info.model.replace(/_/g, " ")} ${info.labelSerial || info.id}`.trim();
-        }
-        const eqSel = document.getElementById("unified-equipment");
-        if (eqSel) eqSel.value = "";
-        equipmentStatus("Lido do .tps. Clique em Salvar equipamento para não precisar do arquivo de novo.");
-      } catch (err) {
-        if (status) status.textContent = "Não consegui ler o .tps.";
-      }
-    });
-  }
-
-  function setupField(f) {
-    const sel = document.getElementById(f.select);
-    const other = document.getElementById(f.other);
-    const num = document.getElementById(f.number);
+    const sel = $(selId);
+    const other = $(otherId);
     if (!sel) return;
-    const store = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
-    const load = (k) => { try { return localStorage.getItem(k) || ""; } catch (_) { return ""; } };
-    const saved = load(f.typeKey);
-    if (saved) {
-      const known = Array.from(sel.options).some((o) => o.value === saved || o.text === saved);
-      if (known) sel.value = saved; else { sel.value = "__other"; if (other) other.value = saved; }
-    }
-    if (num) num.value = load(f.numberKey);
-    const sync = () => {
-      if (other) other.classList.toggle("hidden", sel.value !== "__other");
-      store(f.typeKey, fieldChoice(f).type || "");
-    };
-    sel.addEventListener("change", sync);
-    other?.addEventListener("input", sync);
-    num?.addEventListener("input", () => store(f.numberKey, num.value.trim()));
-    const ver = f.version ? document.getElementById(f.version) : null;
-    if (ver) {
-      ver.value = load(f.versionKey);
-      ver.addEventListener("input", () => store(f.versionKey, ver.value.trim()));
-    }
-    sync();
+    if (!value) sel.value = "";
+    else if (Array.from(sel.options).some((o) => o.value === value || o.text === value)) sel.value = value;
+    else { sel.value = "__other"; if (other) other.value = value; }
+    if (other) other.classList.toggle("hidden", sel.value !== "__other");
   }
 
-  // "Meus equipamentos": receptores salvos no perfil, escolhidos no seletor
-  let equipmentList = [];
-
-  function equipmentStatus(text) {
-    const el = document.getElementById("unified-equipment-status");
-    if (el) el.textContent = text || "";
+  function readSelect(selId, otherId) {
+    const sel = $(selId);
+    let v = sel ? sel.value : "";
+    if (v === "__other") v = ($(otherId)?.value || "").trim();
+    return v || null;
   }
 
-  function fillFromEquipment(eq) {
-    const setSel = (selId, otherId, value) => {
-      if (value) { setSelectOrOther(selId, otherId, value); return; }
-      const sel = document.getElementById(selId);
-      if (sel) { sel.value = ""; sel.dispatchEvent(new Event("change")); }
+  function setVal(id, value) { const el = $(id); if (el) el.value = value || ""; }
+  function val(id) { return ($(id)?.value || "").trim() || null; }
+
+  function formStatus(text) { const el = $("unified-equipment-status"); if (el) el.textContent = text || ""; }
+
+  // ---- formulário de cadastro (fica fechado no uso do dia a dia) ----
+  let editingId = null;
+
+  function fillForm(eq) {
+    editingId = eq ? eq.id : null;
+    setVal("unified-equipment-name", eq?.name);
+    setSelectOrOther("unified-receiver", "unified-receiver-other", eq?.receiver_type);
+    setVal("unified-receiver-number", eq?.board_id);
+    setVal("unified-receiver-version", eq?.firmware);
+    setSelectOrOther("unified-antenna", "unified-antenna-other", eq?.antenna_type);
+    setVal("unified-antenna-number", eq?.antenna_serial);
+    setVal("unified-tps-file", "");
+    const tps = $("unified-tps-status"); if (tps) tps.textContent = "";
+    const title = $("unified-equipment-title");
+    if (title) title.textContent = eq ? `Editar ${eq.name}` : "Novo equipamento";
+    $("unified-equipment-save").textContent = eq ? "Salvar alterações" : "Salvar equipamento";
+    $("unified-equipment-delete")?.classList.toggle("hidden", !eq);
+    $("unified-equipment-save-new")?.classList.toggle("hidden", !eq);
+    formStatus("");
+  }
+
+  function openPanel(eq) {
+    fillForm(eq);
+    $("unified-equipment-panel")?.classList.remove("hidden");
+    $("unified-equipment-name")?.focus();
+  }
+
+  function closePanel() { $("unified-equipment-panel")?.classList.add("hidden"); }
+
+  function formBody() {
+    const receiver = readSelect("unified-receiver", "unified-receiver-other");
+    const board = val("unified-receiver-number");
+    const name = val("unified-equipment-name") ||
+      [receiver, val("unified-antenna-number") || board].filter(Boolean).join(" ");
+    return {
+      name, receiver_type: receiver, board_id: board, firmware: val("unified-receiver-version"),
+      antenna_type: readSelect("unified-antenna", "unified-antenna-other"),
+      antenna_serial: val("unified-antenna-number"),
     };
-    const setVal = (id, value) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.value = value || "";
-      el.dispatchEvent(new Event("input"));
-    };
-    setSel("unified-receiver", "unified-receiver-other", eq.receiver_type);
-    setVal("unified-receiver-number", eq.board_id);
-    setVal("unified-receiver-version", eq.firmware);
-    setSel("unified-antenna", "unified-antenna-other", eq.antenna_type);
-    setVal("unified-antenna-number", eq.antenna_serial);
-    setVal("unified-equipment-name", eq.name);
   }
 
   function renderEquipment(selectedId) {
-    const sel = document.getElementById("unified-equipment");
+    const sel = $("unified-equipment");
     if (!sel) return;
-    sel.innerHTML = '<option value="">Preencher à mão</option>';
+    sel.innerHTML = '<option value="">Padrão VRS (sem receptor)</option>';
     equipmentList.forEach((eq) => {
       const opt = document.createElement("option");
       opt.value = String(eq.id);
       opt.textContent = eq.board_id ? `${eq.name} · ${eq.board_id}` : eq.name;
       sel.appendChild(opt);
     });
-    sel.value = selectedId ? String(selectedId) : "";
-    document.getElementById("unified-equipment-delete")?.classList.toggle("hidden", !sel.value);
+    sel.value = equipmentList.some((e) => String(e.id) === String(selectedId)) ? String(selectedId) : "";
+    const manage = $("unified-equipment-manage");
+    if (manage) manage.textContent = sel.value ? "Editar este equipamento" : "Cadastrar equipamento";
+    showSummary();
   }
 
   async function loadEquipment(selectedId) {
+    let saved = "";
+    try { saved = localStorage.getItem("ob_equipment_id") || ""; } catch (_) {}
     try {
       const res = await fetch(`${API}/users/me/equipment`, { headers: headers() });
-      if (!res.ok) return;
-      equipmentList = await res.json();
-      let saved = "";
-      try { saved = localStorage.getItem("ob_equipment_id") || ""; } catch (_) {}
-      const pick = selectedId || saved;
-      renderEquipment(equipmentList.some((e) => String(e.id) === String(pick)) ? pick : "");
+      if (res.ok) equipmentList = await res.json();
     } catch (_) {}
+    renderEquipment(selectedId ?? saved);
   }
 
-  function setupEquipment() {
-    const sel = document.getElementById("unified-equipment");
-    if (!sel) return;
-    sel.addEventListener("change", () => {
-      try { localStorage.setItem("ob_equipment_id", sel.value); } catch (_) {}
-      document.getElementById("unified-equipment-delete")?.classList.toggle("hidden", !sel.value);
-      const eq = equipmentList.find((e) => String(e.id) === sel.value);
-      if (eq) { fillFromEquipment(eq); equipmentStatus(""); }
-    });
+  function rememberSelection(id) {
+    try { localStorage.setItem("ob_equipment_id", id ? String(id) : ""); } catch (_) {}
+  }
 
-    document.getElementById("unified-equipment-save")?.addEventListener("click", async () => {
-      const c = receiverChoice();
-      const nameEl = document.getElementById("unified-equipment-name");
-      const name = (nameEl?.value || "").trim() ||
-        [c.type, c.antennaNumber || c.number].filter(Boolean).join(" ");
-      if (!name) { equipmentStatus("Dê um apelido ou preencha o receptor."); return; }
-      const body = {
-        name, receiver_type: c.type, board_id: c.number, firmware: c.version,
-        antenna_type: c.antennaType, antenna_serial: c.antennaNumber,
-      };
-      const current = equipmentList.find((e) => String(e.id) === sel.value);
-      const sameName = current && current.name === name;
-      const url = sameName ? `${API}/users/me/equipment/${current.id}` : `${API}/users/me/equipment`;
+  async function saveEquipment(asNew) {
+    const body = formBody();
+    if (!body.name) { formStatus("Dê um apelido ou escolha o modelo."); return; }
+    if (!body.board_id) { formStatus("Informe o ID interno da placa (rcv/id): é ele que o Topcon lê."); return; }
+    const editing = !asNew && editingId != null;
+    try {
+      const res = await fetch(editing ? `${API}/users/me/equipment/${editingId}` : `${API}/users/me/equipment`, {
+        method: editing ? "PUT" : "POST", headers: headers(true), body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { formStatus(data?.detail || "Não consegui salvar."); return; }
+      rememberSelection(data.id);
+      await loadEquipment(data.id);
+      closePanel();
+    } catch (_) { formStatus("Não consegui salvar."); }
+  }
+
+  async function deleteEquipment() {
+    if (editingId == null) return;
+    try {
+      const res = await fetch(`${API}/users/me/equipment/${editingId}`, { method: "DELETE", headers: headers() });
+      if (!res.ok) { formStatus("Não consegui excluir."); return; }
+      rememberSelection("");
+      await loadEquipment("");
+      closePanel();
+    } catch (_) { formStatus("Não consegui excluir."); }
+  }
+
+  function setupTpsReader() {
+    const input = $("unified-tps-file");
+    const status = $("unified-tps-status");
+    if (!input) return;
+    input.addEventListener("change", async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
       try {
-        const res = await fetch(url, {
-          method: sameName ? "PUT" : "POST", headers: headers(true), body: JSON.stringify(body),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) { equipmentStatus(data?.detail || "Não consegui salvar."); return; }
-        try { localStorage.setItem("ob_equipment_id", String(data.id)); } catch (_) {}
-        await loadEquipment(data.id);
-        equipmentStatus(sameName ? "Equipamento atualizado." : "Equipamento salvo.");
-      } catch (_) { equipmentStatus("Não consegui salvar."); }
+        const info = parseTpsHeader(await file.slice(0, 65536).text());
+        if (!info.id) { if (status) status.textContent = "Não achei rcv/id no início deste arquivo."; return; }
+        setVal("unified-receiver-number", info.id);
+        if (info.firmware) setVal("unified-receiver-version", info.firmware);
+        if (info.model) {
+          setSelectOrOther("unified-receiver", "unified-receiver-other", `TPS ${info.model}`);
+          setSelectOrOther("unified-antenna", "unified-antenna-other", `TPS${info.model}`);
+        }
+        if (info.labelSerial) setVal("unified-antenna-number", info.labelSerial);
+        if (!val("unified-equipment-name") && info.model) {
+          setVal("unified-equipment-name", `${info.model.replace(/_/g, " ")} ${info.labelSerial || info.id}`.trim());
+        }
+        if (status) {
+          status.textContent = `Lido: placa ${info.id}` + (info.model ? ` · ${info.model}` : "") +
+            (info.labelSerial ? ` · rótulo ${info.labelSerial}` : "") + ". Confira e salve.";
+        }
+      } catch (_) {
+        if (status) status.textContent = "Não consegui ler o .tps.";
+      }
     });
-
-    document.getElementById("unified-equipment-delete")?.addEventListener("click", async () => {
-      const id = sel.value;
-      if (!id) return;
-      try {
-        const res = await fetch(`${API}/users/me/equipment/${id}`, { method: "DELETE", headers: headers() });
-        if (!res.ok) { equipmentStatus("Não consegui excluir."); return; }
-        try { localStorage.removeItem("ob_equipment_id"); } catch (_) {}
-        await loadEquipment("");
-        equipmentStatus("Equipamento excluído.");
-      } catch (_) { equipmentStatus("Não consegui excluir."); }
-    });
-
-    loadEquipment();
   }
 
   function setupReceiverField() {
-    RINEX_FIELDS.forEach(setupField);
+    const sel = $("unified-equipment");
+    if (!sel) return;
+    sel.addEventListener("change", () => {
+      rememberSelection(sel.value);
+      renderEquipment(sel.value);
+      closePanel();
+    });
+    $("unified-equipment-manage")?.addEventListener("click", () => openPanel(selectedEquipment()));
+    $("unified-equipment-close")?.addEventListener("click", closePanel);
+    $("unified-equipment-save")?.addEventListener("click", () => saveEquipment(false));
+    $("unified-equipment-save-new")?.addEventListener("click", () => saveEquipment(true));
+    $("unified-equipment-delete")?.addEventListener("click", deleteEquipment);
+    ["unified-receiver", "unified-antenna"].forEach((id) => {
+      $(id)?.addEventListener("change", () =>
+        $(`${id}-other`)?.classList.toggle("hidden", $(id).value !== "__other"));
+    });
     setupTpsReader();
-    setupEquipment();
+    loadEquipment();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", setupReceiverField);
@@ -507,7 +490,8 @@
         finishProcessingModal({
           percent: 100, status: "completed", message: "Base VRS gerada",
           detail: `${r.epochs_written} épocas a ${r.step_seconds} s · base mestra ${r.master_station || "-"}` +
-            (r.master_distance_km ? ` (${Number(r.master_distance_km).toFixed(1)} km)` : ""),
+            (r.master_distance_km ? ` (${Number(r.master_distance_km).toFixed(1)} km)` : "") +
+            (r.receiver ? ` · REC # ${r.receiver.number} (${r.receiver.type})` : ""),
         });
         if (downloads) { downloads.innerHTML = downloadsHtml(jobId); downloads.classList.remove("hidden"); }
       }
