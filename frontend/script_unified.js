@@ -310,6 +310,13 @@
           status.textContent = `Placa ${info.id}` + (info.model ? ` · ${info.model}` : "") +
             (info.labelSerial ? ` · rótulo ${info.labelSerial}` : "");
         }
+        const nameEl = document.getElementById("unified-equipment-name");
+        if (nameEl && !nameEl.value && info.model) {
+          nameEl.value = `${info.model.replace(/_/g, " ")} ${info.labelSerial || info.id}`.trim();
+        }
+        const eqSel = document.getElementById("unified-equipment");
+        if (eqSel) eqSel.value = "";
+        equipmentStatus("Lido do .tps. Clique em Salvar equipamento para não precisar do arquivo de novo.");
       } catch (err) {
         if (status) status.textContent = "Não consegui ler o .tps.";
       }
@@ -344,9 +351,114 @@
     sync();
   }
 
+  // "Meus equipamentos": receptores salvos no perfil, escolhidos no seletor
+  let equipmentList = [];
+
+  function equipmentStatus(text) {
+    const el = document.getElementById("unified-equipment-status");
+    if (el) el.textContent = text || "";
+  }
+
+  function fillFromEquipment(eq) {
+    const setSel = (selId, otherId, value) => {
+      if (value) { setSelectOrOther(selId, otherId, value); return; }
+      const sel = document.getElementById(selId);
+      if (sel) { sel.value = ""; sel.dispatchEvent(new Event("change")); }
+    };
+    const setVal = (id, value) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = value || "";
+      el.dispatchEvent(new Event("input"));
+    };
+    setSel("unified-receiver", "unified-receiver-other", eq.receiver_type);
+    setVal("unified-receiver-number", eq.board_id);
+    setVal("unified-receiver-version", eq.firmware);
+    setSel("unified-antenna", "unified-antenna-other", eq.antenna_type);
+    setVal("unified-antenna-number", eq.antenna_serial);
+    setVal("unified-equipment-name", eq.name);
+  }
+
+  function renderEquipment(selectedId) {
+    const sel = document.getElementById("unified-equipment");
+    if (!sel) return;
+    sel.innerHTML = '<option value="">Preencher à mão</option>';
+    equipmentList.forEach((eq) => {
+      const opt = document.createElement("option");
+      opt.value = String(eq.id);
+      opt.textContent = eq.board_id ? `${eq.name} · ${eq.board_id}` : eq.name;
+      sel.appendChild(opt);
+    });
+    sel.value = selectedId ? String(selectedId) : "";
+    document.getElementById("unified-equipment-delete")?.classList.toggle("hidden", !sel.value);
+  }
+
+  async function loadEquipment(selectedId) {
+    try {
+      const res = await fetch(`${API}/users/me/equipment`, { headers: headers() });
+      if (!res.ok) return;
+      equipmentList = await res.json();
+      let saved = "";
+      try { saved = localStorage.getItem("ob_equipment_id") || ""; } catch (_) {}
+      const pick = selectedId || saved;
+      renderEquipment(equipmentList.some((e) => String(e.id) === String(pick)) ? pick : "");
+    } catch (_) {}
+  }
+
+  function setupEquipment() {
+    const sel = document.getElementById("unified-equipment");
+    if (!sel) return;
+    sel.addEventListener("change", () => {
+      try { localStorage.setItem("ob_equipment_id", sel.value); } catch (_) {}
+      document.getElementById("unified-equipment-delete")?.classList.toggle("hidden", !sel.value);
+      const eq = equipmentList.find((e) => String(e.id) === sel.value);
+      if (eq) { fillFromEquipment(eq); equipmentStatus(""); }
+    });
+
+    document.getElementById("unified-equipment-save")?.addEventListener("click", async () => {
+      const c = receiverChoice();
+      const nameEl = document.getElementById("unified-equipment-name");
+      const name = (nameEl?.value || "").trim() ||
+        [c.type, c.antennaNumber || c.number].filter(Boolean).join(" ");
+      if (!name) { equipmentStatus("Dê um apelido ou preencha o receptor."); return; }
+      const body = {
+        name, receiver_type: c.type, board_id: c.number, firmware: c.version,
+        antenna_type: c.antennaType, antenna_serial: c.antennaNumber,
+      };
+      const current = equipmentList.find((e) => String(e.id) === sel.value);
+      const sameName = current && current.name === name;
+      const url = sameName ? `${API}/users/me/equipment/${current.id}` : `${API}/users/me/equipment`;
+      try {
+        const res = await fetch(url, {
+          method: sameName ? "PUT" : "POST", headers: headers(true), body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { equipmentStatus(data?.detail || "Não consegui salvar."); return; }
+        try { localStorage.setItem("ob_equipment_id", String(data.id)); } catch (_) {}
+        await loadEquipment(data.id);
+        equipmentStatus(sameName ? "Equipamento atualizado." : "Equipamento salvo.");
+      } catch (_) { equipmentStatus("Não consegui salvar."); }
+    });
+
+    document.getElementById("unified-equipment-delete")?.addEventListener("click", async () => {
+      const id = sel.value;
+      if (!id) return;
+      try {
+        const res = await fetch(`${API}/users/me/equipment/${id}`, { method: "DELETE", headers: headers() });
+        if (!res.ok) { equipmentStatus("Não consegui excluir."); return; }
+        try { localStorage.removeItem("ob_equipment_id"); } catch (_) {}
+        await loadEquipment("");
+        equipmentStatus("Equipamento excluído.");
+      } catch (_) { equipmentStatus("Não consegui excluir."); }
+    });
+
+    loadEquipment();
+  }
+
   function setupReceiverField() {
     RINEX_FIELDS.forEach(setupField);
     setupTpsReader();
+    setupEquipment();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", setupReceiverField);

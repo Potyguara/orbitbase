@@ -117,6 +117,18 @@
               <option value="30">30 s</option>
             </select>
           </label>
+          <label class="ob-field">Meu equipamento
+            <select id="unified-equipment">
+              <option value="">Preencher à mão</option>
+            </select>
+            <small class="ob-hint">Cadastre uma vez e depois só escolha aqui.</small>
+          </label>
+          <div class="ob-field ob-field-btn">
+            <input id="unified-equipment-name" type="text" maxlength="80" placeholder="Apelido (ex.: HiPer SR 1064-12234)" />
+            <button id="unified-equipment-save" type="button" class="ob-btn ob-btn-ghost">Salvar equipamento</button>
+            <button id="unified-equipment-delete" type="button" class="ob-btn ob-btn-ghost hidden">Excluir</button>
+            <small id="unified-equipment-status" class="ob-hint"></small>
+          </div>
           <label class="ob-field">Receptor no RINEX
             <select id="unified-receiver">
               <option value="" selected>Padrão (ORBITBASE VRS)</option>
@@ -421,6 +433,6 @@
   </div>
 
   <script src="./script.js?v=505"></script>
-  <script src="./script_unified.js?v=5"></script>
+  <script src="./script_unified.js?v=6"></script>
 </body>
 </html>
