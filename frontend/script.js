@@ -907,23 +907,126 @@ function renderGnssStationsOnMap() {
   }
 }
 
+function distanceKm(lat1, lon1, lat2, lon2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 6371.0088 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatKm(km) {
+  return km.toLocaleString("pt-BR", { maximumFractionDigits: km < 100 ? 1 : 0 }) + " km";
+}
+
 function renderSelectedStationsInfo() {
   const box = document.getElementById("selected-stations-summary");
   if (!box) return;
 
-  const selected = gnssStationsCache.filter((s) =>
-    selectedGnssStations.has(s.station_code)
-  );
+  const target = getTargetFromForm();
+  const selected = gnssStationsCache
+    .filter((s) => selectedGnssStations.has(s.station_code))
+    .map((s) => ({
+      station: s,
+      km:
+        target && s.latitude != null && s.longitude != null
+          ? distanceKm(target.lat, target.lon, s.latitude, s.longitude)
+          : null
+    }));
 
   if (!selected.length) {
     box.innerHTML = "Nenhuma estação RBMC selecionada.";
     return;
   }
 
+  if (target) selected.sort((a, b) => (a.km ?? Infinity) - (b.km ?? Infinity));
+
   box.innerHTML = `
     <strong>Selecionadas (${selected.length})</strong><br>
-    ${selected.map((s) => `${s.station_code} - ${s.station_name || "-"}`).join("<br>")}
+    ${selected
+      .map(({ station: s, km }) =>
+        `${s.station_code} - ${s.station_name || "-"}${km != null ? ` <small>(${formatKm(km)})</small>` : ""}`
+      )
+      .join("<br>")}
   `;
+}
+
+const NEAREST_COUNT_KEY = "orbitbase.nearestCount";
+
+function restoreNearestCount() {
+  const select = document.getElementById("nearest-count");
+  if (!select) return;
+  try {
+    const saved = localStorage.getItem(NEAREST_COUNT_KEY);
+    if (saved && select.querySelector(`option[value="${saved}"]`)) select.value = saved;
+  } catch (_) { /* sem localStorage: fica o padrão */ }
+}
+
+function selectNearestActiveStations() {
+  clearMessage("rbmc-sync-message");
+
+  const target = getTargetFromForm();
+  if (!target) {
+    showMessage(
+      "rbmc-sync-message",
+      "Informe primeiro a latitude, a longitude e a altura do ponto da base.",
+      true
+    );
+    return;
+  }
+
+  const count = Math.min(10, Math.max(1, Number(document.getElementById("nearest-count")?.value) || 4));
+
+  const nearest = gnssStationsCache
+    .filter((s) => s.is_active && s.latitude != null && s.longitude != null)
+    .map((s) => ({ station: s, km: distanceKm(target.lat, target.lon, s.latitude, s.longitude) }))
+    .sort((a, b) => a.km - b.km)
+    .slice(0, count);
+
+  if (!nearest.length) {
+    showMessage("rbmc-sync-message", "Nenhuma estação RBMC ativa encontrada. Use \"Atualizar estações\".", true);
+    return;
+  }
+
+  selectedGnssStations.clear();
+  nearest.forEach(({ station }) => selectedGnssStations.add(station.station_code));
+  renderSelectedStationsInfo();
+  renderGnssStationsOnMap();
+
+  if (orbitbaseMap) {
+    const bounds = L.latLngBounds([[target.lat, target.lon]]);
+    nearest.forEach(({ station }) => bounds.extend([station.latitude, station.longitude]));
+    orbitbaseMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
+  }
+
+  if (nearest.length < count) {
+    showMessage(
+      "rbmc-sync-message",
+      `Só há ${nearest.length} estação(ões) ativa(s) com coordenadas; todas foram selecionadas.`,
+      true
+    );
+  }
+}
+
+function initSelectNearestButton() {
+  const btn = document.getElementById("select-nearest-btn");
+  const select = document.getElementById("nearest-count");
+  if (!btn || !select) return;
+
+  restoreNearestCount();
+
+  select.addEventListener("change", () => {
+    try { localStorage.setItem(NEAREST_COUNT_KEY, select.value); } catch (_) { /* ignora */ }
+  });
+
+  // o seletor fica dentro do #job-form: o reset do formulário volta para o padrão,
+  // então reaplica a última escolha do usuário logo depois.
+  const form = select.form;
+  if (form) form.addEventListener("reset", () => setTimeout(restoreNearestCount, 0));
+
+  btn.addEventListener("click", selectNearestActiveStations);
 }
 
 function calculateJobMinutesAutomatically() {
@@ -1011,6 +1114,7 @@ function updateTargetPreviewFromForm(fitBounds = false) {
   const target = getTargetFromForm();
 
   resetTargetPreview();
+  renderSelectedStationsInfo();
 
   if (!target) {
     renderNetworkMap(null, jobsCache);
@@ -1907,6 +2011,7 @@ function initDashboardPage() {
   
   initCancelEditButton();
   initClearStationsButton();
+  initSelectNearestButton();
   setSubmitButtonState(false);
   initVrsConfigModal();
   bindTargetPreviewEvents();

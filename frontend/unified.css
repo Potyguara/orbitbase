@@ -84,6 +84,15 @@
 .ob-legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--ob-muted); margin: 10px 0; }
 .ob-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 .ob-dot-blue { background: #2563eb; } .ob-dot-green { background: #16a34a; } .ob-dot-red { background: #dc2626; }
+.ob-nearest { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0 0 10px; font-size: 14px; color: var(--ob-ink); }
+.ob-nearest label { display: inline; margin: 0; font-size: 14px; font-weight: 500; color: var(--ob-ink); }
+.ob-nearest select {
+  width: auto; min-width: 64px; margin: 0;
+  border: 1px solid var(--ob-line); border-radius: 10px; padding: 8px 10px; font-size: 14px;
+  color: var(--ob-ink); background: #fbfcfe; font-family: inherit;
+}
+.ob-nearest .ob-btn { margin-left: auto; }
+@media (max-width: 640px) { .ob-nearest .ob-btn { margin-left: 0; width: 100%; } }
 .ob-selected { background: var(--ob-accent-soft); color: var(--ob-accent-dark); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
 
 .ob-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
