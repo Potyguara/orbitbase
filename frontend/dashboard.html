@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css?v=505" />
-  <link rel="stylesheet" href="./unified.css?v=7" />
+  <link rel="stylesheet" href="./unified.css?v=8" />
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -236,7 +236,7 @@
           <span class="ob-step">3</span>
           <div>
             <h2>Estações RBMC</h2>
-            <p>Clique nas estações em volta do ponto. A mais próxima com dados bons vira a base mestra.</p>
+            <p>Clique nas estações em volta do ponto ou selecione automaticamente as mais próximas. A mais próxima com dados bons vira a base mestra.</p>
           </div>
           <button id="sync-rbmc-btn" type="button" class="ob-btn ob-btn-ghost ob-head-action">Atualizar estações</button>
         </div>
@@ -245,6 +245,23 @@
           <span><i class="ob-dot ob-dot-blue"></i>Selecionada</span>
           <span><i class="ob-dot ob-dot-green"></i>Ativa</span>
           <span><i class="ob-dot ob-dot-red"></i>Ponto da base</span>
+        </div>
+        <div class="ob-nearest">
+          <label for="nearest-count">Selecionar as</label>
+          <select id="nearest-count" aria-label="Quantidade de estações">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4" selected>4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10</option>
+          </select>
+          <span>estações ativas mais próximas do ponto da base</span>
+          <button id="select-nearest-btn" type="button" class="ob-btn ob-btn-ghost">Selecionar mais próximas</button>
         </div>
         <div id="selected-stations-summary" class="ob-selected">Nenhuma estação RBMC selecionada.</div>
         <div id="rbmc-sync-message" class="message-box hidden"></div>
@@ -463,7 +480,7 @@
     </div>
   </div>
 
-  <script src="./script.js?v=505"></script>
+  <script src="./script.js?v=506"></script>
   <script src="./script_unified.js?v=9"></script>
 </body>
 </html>
