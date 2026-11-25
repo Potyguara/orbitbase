@@ -152,9 +152,40 @@
 }
 .ob-download-notice-show { opacity: 1; transform: translate(-50%, 0); }
 .ob-download-notice-error { background: #a12020; }
+/* central de downloads (efemérides e RBMC) */
+.ob-check { display: flex; align-items: center; gap: 8px; font-size: 14px; margin: 8px 0; cursor: pointer; }
+.ob-check input { width: 16px; height: 16px; flex: 0 0 16px; margin: 0; accent-color: var(--ob-accent); }
+.ob-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 8px; }
+.ob-chip {
+  border: 1px solid var(--ob-accent); background: var(--ob-accent-soft); color: var(--ob-accent-dark);
+  border-radius: 999px; padding: 4px 10px; font: 600 12px/1.4 inherit; cursor: pointer;
+}
+.ob-station-list {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px;
+  max-height: 300px; overflow-y: auto; border: 1px solid var(--ob-line); border-radius: 12px;
+  padding: 8px; background: #fbfcfe; margin-bottom: 8px;
+}
+.ob-station { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 6px 8px; border-radius: 8px; cursor: pointer; min-width: 0; }
+.ob-station input { width: 16px; height: 16px; flex: 0 0 16px; margin: 0; accent-color: var(--ob-accent); }
+.ob-station strong { flex: 0 0 auto; }
+.ob-station:hover { background: var(--ob-accent-soft); }
+.ob-station span { color: var(--ob-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ob-station .ob-badge { margin-top: 0; padding: 1px 6px; font-size: 11px; }
+.ob-actions-split { justify-content: space-between; align-items: center; }
+.ob-progress { margin-top: 16px; }
+.ob-progress-bar { height: 8px; background: var(--ob-line); border-radius: 999px; overflow: hidden; margin-bottom: 10px; }
+.ob-progress-bar span { display: block; height: 100%; width: 0; background: var(--ob-accent); transition: width .3s; }
+.ob-log { overflow-wrap: anywhere; margin: 10px 0; padding-left: 18px; font-size: 13px; color: var(--ob-muted); max-height: 220px; overflow-y: auto; }
+/* nome do usuário no topo leva ao perfil */
+a.ob-user-pill { text-decoration: none; transition: background .15s; }
+a.ob-user-pill:hover { background: rgba(255,255,255,.18); color: #fff; }
+a.ob-user-pill::after { content: " · Meu perfil"; color: #9fb3cf; }
+@media (max-width: 520px) { a.ob-user-pill::after { content: ""; } }
+.ob-hint { margin: 4px 0 0 24px; font-size: 13px; color: var(--ob-muted); line-height: 1.5; }
+.ob-hint code { background: #eef2f7; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 
 /* receptor no RINEX: escolha + cadastro de equipamentos */
-.ob-hint { color: var(--ob-muted); font-size: 12px; font-weight: 400; }
+.ob-field .ob-hint, .ob-equip-panel .ob-hint { margin: 0; font-size: 12px; font-weight: 400; color: var(--ob-muted); }
 .ob-link {
   background: none; border: 0; padding: 0; color: var(--ob-accent-dark); font: inherit;
   font-size: 13px; font-weight: 600; cursor: pointer; text-align: left; align-self: flex-start;

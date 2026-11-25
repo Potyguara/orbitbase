@@ -606,6 +606,10 @@ def brdc_product_candidates(
 
     names = [
         f"BRDC00WRD_R_{yyyy}{doy}0000_01D_MN.rnx.gz",
+        # mesmos dados combinados por outros centros (BKG publica os quatro)
+        f"BRDC00IGS_R_{yyyy}{doy}0000_01D_MN.rnx.gz",
+        f"BRDC00WRD_S_{yyyy}{doy}0000_01D_MN.rnx.gz",
+        f"BRDM00DLR_S_{yyyy}{doy}0000_01D_MN.rnx.gz",
         f"brdc{doy}0.{yy}n.gz",
     ]
 

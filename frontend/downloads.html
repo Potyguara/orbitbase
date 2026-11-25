@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OrbitBase | Efemérides e RBMC</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css?v=505" />
+  <link rel="stylesheet" href="./unified.css?v=6" />
+</head>
+<body class="dashboard-body ob-unified">
+
+  <header class="ob-topbar">
+    <div class="ob-wrap ob-topbar-inner">
+      <div class="ob-brand">
+        <div class="ob-brand-mark">O</div>
+        <div>
+          <strong>OrbitBase</strong>
+          <span>Efemérides e RBMC por data</span>
+        </div>
+      </div>
+      <nav class="ob-nav">
+        <a class="ob-btn ob-btn-ghost ob-btn-sm" href="./dashboard.html">Base VRS</a>
+        <a id="user-name-nav" class="ob-user-pill" href="./profile.html" title="Meu perfil">Carregando...</a>
+        <button id="logout-btn" class="ob-btn ob-btn-ghost" type="button">Sair</button>
+      </nav>
+    </div>
+  </header>
+
+  <section class="ob-hero">
+    <div class="ob-wrap">
+      <span class="ob-eyebrow">Downloads</span>
+      <h1>Efemérides e RINEX da RBMC</h1>
+      <p>
+        Escolha um dia ou um período e baixe, num único ZIP, as efemérides transmitidas
+        GPS (.n) e GLONASS (.g) em RINEX 2.11, prontas para o Topcon Tools, e os arquivos
+        diários das estações RBMC publicados pelo IBGE.
+      </p>
+    </div>
+  </section>
+
+  <main class="ob-wrap ob-main">
+    <form id="dl-form" class="ob-steps">
+      <section class="ob-card">
+        <div class="ob-card-head">
+          <span class="ob-step">1</span>
+          <div>
+            <h2>Datas</h2>
+            <p>Um dia ou um intervalo de até 31 dias. Deixe a data final vazia para um dia só.</p>
+          </div>
+        </div>
+        <div class="ob-grid">
+          <label class="ob-field">Data inicial
+            <input id="dl-start" type="date" required />
+          </label>
+          <label class="ob-field">Data final (opcional)
+            <input id="dl-end" type="date" />
+          </label>
+          <div class="ob-field ob-span-2">Dia do ano (GPS)
+            <div id="dl-doy" class="ob-selected">--</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ob-card">
+        <div class="ob-card-head">
+          <span class="ob-step">2</span>
+          <div>
+            <h2>Efemérides</h2>
+            <p>Transmitidas (rádio difusão): BRDC diário combinado do IGS, convertido para RINEX 2.11 (brdcDDD0.AAn e brdcDDD0.AAg).
+               Se o IGS não tiver o dia, usamos a navegação de uma estação RBMC.</p>
+          </div>
+        </div>
+        <label class="ob-check"><input id="dl-eph" type="checkbox" checked /> GPS (.n) e GLONASS (.g)</label>
+        <label class="ob-check"><input id="dl-rnx3" type="checkbox" /> Incluir também o arquivo original misto RINEX 3 (_MN.rnx)</label>
+        <label class="ob-check"><input id="dl-sp3" type="checkbox" checked /> Órbita precisa (SP3) para o Topcon Tools mostrar órbita "Precisa"</label>
+        <p class="ob-hint">
+          Vem com o nome curto que o Topcon Tools aceita (ex.: <code>igs24384.sp3</code>). Primeiro tentamos a órbita
+          final (sai ~2 semanas depois do dia); antes disso, a rápida (sai no dia seguinte). A do CODE traz GPS + GLONASS;
+          a do IGS combinado traz só GPS. No Topcon Tools, importe o <code>.sp3</code> na obra junto com as observações e processe de novo.
+        </p>
+      </section>
+
+      <section class="ob-card">
+        <div class="ob-card-head">
+          <span class="ob-step">3</span>
+          <div>
+            <h2>Estações RBMC (opcional)</h2>
+            <p>Até 10 estações. Para cada dia vem o ZIP diário do IBGE: observação, .n e .g da estação.</p>
+          </div>
+        </div>
+        <div class="ob-grid">
+          <label class="ob-field ob-span-2">Buscar estação
+            <input id="dl-search" type="search" placeholder="Código, cidade ou UF (ex.: APMA, Macapá, AP)" autocomplete="off" />
+          </label>
+          <label class="ob-field">UF
+            <select id="dl-state"><option value="">Todas</option></select>
+          </label>
+          <div class="ob-field">Selecionadas
+            <div id="dl-count" class="ob-selected">0 de 10</div>
+          </div>
+        </div>
+        <div id="dl-chips" class="ob-chips"></div>
+        <div id="dl-stations" class="ob-station-list"><div class="ob-empty">Carregando estações...</div></div>
+        <label class="ob-check"><input id="dl-crx" type="checkbox" checked /> Converter observação Hatanaka (.d) para RINEX (.o)</label>
+      </section>
+
+      <section class="ob-card">
+        <div class="ob-actions ob-actions-split">
+          <div id="dl-summary" class="ob-job-meta"></div>
+          <button id="dl-submit" class="ob-btn ob-btn-primary" type="submit">Baixar arquivos</button>
+        </div>
+        <div id="dl-progress" class="ob-progress" hidden>
+          <div class="ob-progress-bar"><span id="dl-bar"></span></div>
+          <div id="dl-message" class="ob-job-meta"></div>
+          <ul id="dl-log" class="ob-log"></ul>
+          <div class="ob-actions">
+            <button id="dl-save" class="ob-btn ob-btn-dl" type="button" hidden>SALVAR ZIP</button>
+          </div>
+        </div>
+      </section>
+    </form>
+
+    <p class="ob-footnote">
+      Fontes: IGS (espelho aberto do BKG) e IBGE/RBMC (geoftp.ibge.gov.br). Com login Earthdata no
+      <a href="./profile.html">perfil</a>, o CDDIS/NASA também é consultado.
+    </p>
+  </main>
+
+  <script src="./downloads.js?v=2"></script>
+</body>
+</html>

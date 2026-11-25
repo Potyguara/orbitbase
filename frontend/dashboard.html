@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css?v=505" />
-  <link rel="stylesheet" href="./unified.css?v=3" />
+  <link rel="stylesheet" href="./unified.css?v=7" />
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -26,7 +26,8 @@
         </div>
       </div>
       <nav class="ob-nav">
-        <span id="user-name-nav" class="ob-user-pill">Carregando...</span>
+        <a class="ob-btn ob-btn-ghost ob-btn-sm" href="./downloads.html">Efemérides e RBMC</a>
+        <a id="user-name-nav" class="ob-user-pill" href="./profile.html" title="Meu perfil">Carregando...</a>
         <button id="logout-btn" class="ob-btn ob-btn-ghost" type="button">Sair</button>
       </nav>
     </div>
@@ -273,6 +274,7 @@
 
     <p class="ob-footnote">
       No IBGE (PPP) ou no software de pós-processamento, use altura de antena 0,000 e antena sem modelo para a base VRS.
+      <a href="./downloads.html">Baixar efemérides e RBMC por data</a> ·
       <a href="./classic/dashboard.html">Painel clássico</a> ·
       <a href="./dashboard_advanced.html">Modo avançado</a>
     </p>
