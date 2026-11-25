@@ -93,6 +93,7 @@ class UserEquipment(Base):
         ForeignKey("users.id"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(80), nullable=False)
+    manufacturer: Mapped[str | None] = mapped_column(String(40), nullable=True)
     receiver_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
     board_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     firmware: Mapped[str | None] = mapped_column(String(40), nullable=True)

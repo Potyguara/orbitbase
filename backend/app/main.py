@@ -13,6 +13,7 @@ from app.routers import user_advanced_credentials
 from app.routers import user_equipment
 
 Base.metadata.create_all(bind=engine)
+user_equipment.ensure_equipment_columns(engine)
 
 app = FastAPI(
     title=settings.app_name,
