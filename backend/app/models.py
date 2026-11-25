@@ -79,6 +79,36 @@ class UserAdvancedCredentials(Base):
     user: Mapped["User"] = relationship(back_populates="advanced_credentials")
 
 
+class UserEquipment(Base):
+    """Receptor GNSS do usuário, para preencher o cabeçalho RINEX da VRS.
+
+    board_id é o ID interno da placa (rcv/id no .tps), que vai em REC # e é
+    o que o Topcon Tools usa para identificar o receptor.
+    """
+
+    __tablename__ = "user_equipment"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    manufacturer: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    receiver_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    board_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    firmware: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    antenna_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    antenna_serial: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    label_serial: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
 class VRSJob(Base):
     __tablename__ = "vrs_jobs"
 

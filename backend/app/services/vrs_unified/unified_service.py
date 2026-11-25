@@ -452,11 +452,16 @@ def process_unified_vrs(
     network_mode: str = "master",
     receiver_type: str | None = None,
     receiver_number: str | None = None,
+    antenna_type: str | None = None,
+    antenna_number: str | None = None,
+    receiver_version: str | None = None,
+    receiver_manufacturer: str | None = None,
 ) -> dict:
     """Gera a base VRS na janela exata pedida.
 
-    receiver_type / receiver_number: o que vai em REC # / TYPE / VERS do RINEX
-    (escolha do usuário); o COMMENT de estação virtual continua no cabeçalho.
+    receiver_type / receiver_number: o que vai em REC # / TYPE / VERS do RINEX;
+    antenna_type / antenna_number: o que vai em ANT # / TYPE (escolhas do
+    usuário). O COMMENT de estação virtual continua no cabeçalho.
 
     network_mode="master": transporte geométrico da base mais próxima (padrão).
     network_mode="basic": correção de rede do motor básico, adensada.
@@ -486,7 +491,10 @@ def process_unified_vrs(
         return _finish_unified(
             job, results_dir, epochs, skipped, target_xyz, start_local, end_local,
             start_utc, end_utc, step_seconds, {"network_mode": "master", **info},
-            receiver=receiver_header(receiver_type, receiver_number),
+            receiver=receiver_header(
+                receiver_type, receiver_number, antenna_type, antenna_number, receiver_version,
+                receiver_manufacturer,
+            ),
         )
 
     _write_progress(results_dir, 5, "basic", "Gerando observações de rede (motor básico)")
@@ -540,7 +548,10 @@ def process_unified_vrs(
     return _finish_unified(
         job, results_dir, epochs, skipped, target_xyz, start_local, end_local,
         start_utc, end_utc, step_seconds,
-        receiver=receiver_header(receiver_type, receiver_number),
+        receiver=receiver_header(
+                receiver_type, receiver_number, antenna_type, antenna_number, receiver_version,
+                receiver_manufacturer,
+            ),
         extra={
             "network_mode": "basic",
             "requested_epochs": len(grid),
@@ -594,16 +605,86 @@ def _copy_navigation_files(results_dir: Path, rinex_name: str, nav_paths: list) 
     return out
 
 
-def receiver_header(receiver_type: str | None, receiver_number: str | None) -> dict:
-    """Campos REC # / TYPE / VERS (RINEX: 20 colunas ASCII cada)."""
-    def clean(value: str | None) -> str:
-        text = "".join(ch for ch in str(value or "") if 32 <= ord(ch) < 127)
-        return " ".join(text.upper().split())[:20]
+IGS_RADOMES = {"NONE", "SCIS", "SCIT", "TZGD", "LEIT", "LEIS", "TCWD", "DOME", "UNAV"}
 
-    rtype = clean(receiver_type)
-    if not rtype:
-        return {"number": "VRS", "type": "ORBITBASE VRS", "version": "1.0"}
-    return {"number": clean(receiver_number), "type": rtype, "version": "ORBITBASE 1.0"}
+
+def _rinex_text(value: str | None, size: int = 20, upper: bool = True) -> str:
+    """ASCII, espaços simples, cortado no tamanho do campo RINEX."""
+    text = "".join(ch for ch in str(value or "") if 32 <= ord(ch) < 127)
+    text = " ".join(text.split())
+    return (text.upper() if upper else text)[:size]
+
+
+# Prefixos de fabricante que aparecem no início do modelo (códigos IGS e nomes)
+MANUFACTURER_PREFIXES = {
+    "TPS": "Topcon", "TOPCON": "Topcon", "CHC": "CHC", "HUACE": "CHC", "SOUTH": "South",
+    "COMNAV": "ComNav", "TRIMBLE": "Trimble", "TRM": "Trimble", "LEICA": "Leica",
+    "EMLID": "Emlid", "STONEX": "Stonex", "HI-TARGET": "Hi-Target", "HITARGET": "Hi-Target",
+    "KOLIDA": "Kolida", "FOIF": "FOIF", "SPECTRA": "Spectra", "SEPT": "Septentrio",
+    "SEPTENTRIO": "Septentrio", "JAVAD": "Javad", "JPS": "Javad", "NOVATEL": "NovAtel",
+}
+
+
+def receiver_type_field(manufacturer: str | None, model: str | None) -> str:
+    """TYPE de REC # / TYPE / VERS: fabricante + modelo, como o Topcon Tools grava.
+
+    ("Topcon", "TPS HIPER_SR") -> "Topcon HIPER_SR"; sem fabricante, o modelo como veio.
+    """
+    maker = _rinex_text(manufacturer, 40, upper=False)
+    text = _rinex_text(model, 40, upper=False)
+    if maker:
+        parts = text.split(" ")
+        first = parts[0].upper() if parts and parts[0] else ""
+        if first and (first in MANUFACTURER_PREFIXES or first == maker.upper()):
+            parts = parts[1:]
+        text = " ".join([maker] + [p for p in parts if p])
+    return text[:20]
+
+
+def antenna_type_field(antenna_type: str | None) -> str:
+    """Campo TYPE de ANT # / TYPE no padrão IGS: modelo em 16 colunas + radome em 4.
+
+    "TPSHIPER_SR" -> "TPSHIPER_SR     NONE"; "LEIGS18 LEIT" -> "LEIGS18         LEIT".
+    """
+    text = _rinex_text(antenna_type, 40)
+    if not text:
+        return ""
+    parts = text.split(" ")
+    radome = "NONE"
+    if len(parts) > 1 and parts[-1] in IGS_RADOMES:
+        radome = parts.pop()
+    model = "_".join(parts)[:16]
+    return f"{model:<16}{radome}"
+
+
+def receiver_header(
+    receiver_type: str | None,
+    receiver_number: str | None,
+    antenna_type: str | None = None,
+    antenna_number: str | None = None,
+    receiver_version: str | None = None,
+    receiver_manufacturer: str | None = None,
+) -> dict:
+    """Campos REC # / TYPE / VERS e ANT # / TYPE (RINEX: 20 colunas ASCII cada).
+
+    O que o usuário informar vai para o cabeçalho; o que ficar em branco
+    mantém o padrão da VRS (número "VRS", tipo "ORBITBASE VRS", antena "VIRTUAL").
+    REC # recebe o ID interno da placa (rcv/id do .tps, ex.: O0IZ4RS5R82), que é
+    o que o Topcon Tools usa para identificar o receptor; ele é gravado mesmo
+    quando o modelo do receptor fica no padrão.
+    """
+    rtype = receiver_type_field(receiver_manufacturer, receiver_type)
+    rnumber = _rinex_text(receiver_number, upper=False)
+    rversion = _rinex_text(receiver_version, upper=False)
+    atype = antenna_type_field(antenna_type)
+    anumber = _rinex_text(antenna_number, upper=False)
+    return {
+        "number": rnumber or "VRS",
+        "type": rtype or "ORBITBASE VRS",
+        "version": rversion or ("ORBITBASE 1.0" if rtype else "1.0"),
+        "antenna_number": anumber or "VRS",
+        "antenna_type": atype or "VIRTUAL",
+    }
 
 
 def _finish_unified(
@@ -626,7 +707,8 @@ def _finish_unified(
         receiver_number=receiver["number"],
         receiver_model=receiver["type"],
         receiver_version=receiver["version"],
-        antenna_model="VIRTUAL",
+        antenna_model=receiver["antenna_type"],
+        antenna_number=receiver["antenna_number"],
         approx_position_xyz=target_xyz,
         antenna_delta_hen=(0.0, 0.0, 0.0),
         interval_seconds=float(step_seconds),

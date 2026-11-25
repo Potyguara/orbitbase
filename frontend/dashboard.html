@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css?v=505" />
-  <link rel="stylesheet" href="./unified.css?v=2" />
+  <link rel="stylesheet" href="./unified.css?v=3" />
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -117,33 +117,109 @@
               <option value="30">30 s</option>
             </select>
           </label>
-          <label class="ob-field">Receptor no RINEX
-            <select id="unified-receiver">
-              <option value="" selected>Padrão (ORBITBASE VRS)</option>
-              <option>TOPCON HIPER VR</option>
-              <option>TOPCON HIPER V</option>
-              <option>TOPCON HIPER SR</option>
-              <option>TOPCON HIPER HR</option>
-              <option>TOPCON GR-5</option>
-              <option>TRIMBLE R12</option>
-              <option>TRIMBLE R10</option>
-              <option>TRIMBLE R8S</option>
-              <option>LEICA GS18</option>
-              <option>LEICA GS16</option>
-              <option>CHC I73</option>
-              <option>CHC I90</option>
-              <option>EMLID REACH RS3</option>
-              <option>EMLID REACH RS2</option>
-              <option>SOUTH GALAXY G1</option>
-              <option>COMNAV T300</option>
-              <option>STONEX S900</option>
-              <option value="__other">Outro…</option>
+          <div class="ob-field ob-span-2">Receptor no RINEX
+            <select id="unified-equipment">
+              <option value="">Padrão VRS (sem receptor)</option>
             </select>
-            <input id="unified-receiver-other" type="text" maxlength="20" placeholder="Modelo do receptor" class="hidden" />
-          </label>
-          <label class="ob-field">Nº de série do receptor
-            <input id="unified-receiver-number" type="text" maxlength="20" placeholder="Opcional" />
-          </label>
+            <small id="unified-equipment-summary" class="ob-hint"></small>
+            <button id="unified-equipment-manage" type="button" class="ob-link">Cadastrar ou editar equipamentos</button>
+          </div>
+          <div id="unified-equipment-panel" class="ob-equip-panel hidden">
+            <div class="ob-equip-head">
+              <strong id="unified-equipment-title">Novo equipamento</strong>
+              <button id="unified-equipment-close" type="button" class="ob-link">Fechar</button>
+            </div>
+            <p class="ob-hint">Preencha uma vez. Depois basta escolher o equipamento acima ao gerar a base.</p>
+            <div class="ob-grid">
+              <label class="ob-field ob-span-2">Apelido
+                <input id="unified-equipment-name" type="text" maxlength="80" placeholder="ex.: HiPer SR 1064-12234" />
+              </label>
+              <label class="ob-field ob-span-2">Ler do arquivo bruto (.tps, .hcn, .cnb), opcional
+                <input id="unified-tps-file" type="file" accept=".tps,.TPS,.hcn,.HCN,.cnb,.CNB" />
+                <small id="unified-tps-status" class="ob-hint"></small>
+              </label>
+              <label class="ob-field">Fabricante
+                <select id="unified-manufacturer">
+                  <option value="">Escolha</option>
+                  <option>Topcon</option>
+                  <option>CHC</option>
+                  <option>South</option>
+                  <option>ComNav</option>
+                  <option>Trimble</option>
+                  <option>Leica</option>
+                  <option>Emlid</option>
+                  <option>Stonex</option>
+                  <option>Hi-Target</option>
+                  <option>Kolida</option>
+                  <option>FOIF</option>
+                  <option>Spectra</option>
+                  <option>Septentrio</option>
+                  <option value="__other">Outro…</option>
+                </select>
+                <input id="unified-manufacturer-other" type="text" maxlength="20" placeholder="Fabricante" class="hidden" />
+              </label>
+              <label class="ob-field">Modelo do receptor
+                <input id="unified-receiver" type="text" maxlength="20" list="unified-receiver-models" placeholder="ex.: HIPER_SR, I50, T300" />
+                <datalist id="unified-receiver-models">
+                  <option value="HIPER_SR"></option>
+                  <option value="HIPER_VR"></option>
+                  <option value="HIPER_HR"></option>
+                  <option value="HIPER_V"></option>
+                  <option value="GR-5"></option>
+                  <option value="I50"></option>
+                  <option value="I73"></option>
+                  <option value="I90"></option>
+                  <option value="T300"></option>
+                  <option value="GALAXY G1"></option>
+                  <option value="R12"></option>
+                  <option value="R10"></option>
+                  <option value="R8S"></option>
+                  <option value="GS18"></option>
+                  <option value="GS16"></option>
+                  <option value="REACH RS3"></option>
+                  <option value="REACH RS2"></option>
+                  <option value="S900"></option>
+                </datalist>
+              </label>
+              <label class="ob-field">ID interno da placa (rcv/id)
+                <input id="unified-receiver-number" type="text" maxlength="20" placeholder="ex.: O0IZ4RS5R82, 3487343" title="Vai em REC # do RINEX: rcv/id no .tps da Topcon, ReceiverID / REC # no .hcn e .cnb. É o que o Topcon Tools mostra na coluna receptor." />
+              </label>
+              <label class="ob-field">Firmware do receptor
+                <input id="unified-receiver-version" type="text" maxlength="20" placeholder="Opcional" />
+              </label>
+              <label class="ob-field">Antena
+                <select id="unified-antenna">
+                  <option value="" selected>Sem antena (VIRTUAL)</option>
+                  <option>TPSHIPER_VR</option>
+                  <option>TPSHIPER_V</option>
+                  <option>TPSHIPER_SR</option>
+                  <option>TPSHIPER_HR</option>
+                  <option>TPSGR5</option>
+                  <option>TRMR12</option>
+                  <option>TRMR10</option>
+                  <option>TRMR8S</option>
+                  <option>LEIGS18</option>
+                  <option>LEIGS16</option>
+                  <option>CHCI50</option>
+                  <option>CHCI73</option>
+                  <option>CHCI90</option>
+                  <option>EMLREACH_RS3</option>
+                  <option>EMLREACH_RS2</option>
+                  <option value="__other">Outra…</option>
+                </select>
+                <input id="unified-antenna-other" type="text" maxlength="20" placeholder="Código IGS da antena (ex.: TPSHIPER_SR NONE)" class="hidden" />
+              </label>
+              <label class="ob-field">Nº de série da antena
+                <input id="unified-antenna-number" type="text" maxlength="20" placeholder="Opcional" />
+              </label>
+            </div>
+            <div class="ob-equip-actions">
+              <small id="unified-equipment-status" class="ob-hint"></small>
+              <button id="unified-equipment-delete" type="button" class="ob-btn ob-btn-ghost hidden">Excluir</button>
+              <button id="unified-equipment-save-new" type="button" class="ob-btn ob-btn-ghost hidden">Salvar como novo</button>
+              <button id="unified-equipment-save" type="button" class="ob-btn ob-btn-primary">Salvar equipamento</button>
+            </div>
+          </div>
           <label class="ob-field">Duração (min)
             <input id="occupation-minutes" type="number" min="1" placeholder="Automático" readonly />
           </label>
@@ -386,6 +462,6 @@
   </div>
 
   <script src="./script.js?v=505"></script>
-  <script src="./script_unified.js?v=3"></script>
+  <script src="./script_unified.js?v=9"></script>
 </body>
 </html>

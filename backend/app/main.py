@@ -10,8 +10,10 @@ from app.routers import auth, jobs, users, vrs_profiles, gnss_stations
 
 from app.routers import vrs_advanced, vrs_unified
 from app.routers import user_advanced_credentials
+from app.routers import user_equipment
 
 Base.metadata.create_all(bind=engine)
+user_equipment.ensure_equipment_columns(engine)
 
 app = FastAPI(
     title=settings.app_name,
@@ -70,6 +72,7 @@ app.include_router(gnss_stations.router)
 app.include_router(vrs_advanced.router)
 app.include_router(vrs_unified.router)
 app.include_router(user_advanced_credentials.router)
+app.include_router(user_equipment.router)
 
 
 @app.on_event("startup")
