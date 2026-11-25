@@ -101,6 +101,32 @@ for d in /etc/nginx /etc/apache2 /etc/letsencrypt; do
 done
 echo "$WEB" > "$BACKUP_DIR/web_server.txt"
 
+# Banco do OrbitBase (usuários, jobs, equipamentos) antes de trocar o código.
+# Com o backend no ar, usa a API de backup do SQLite (cópia consistente);
+# sem container, copia o arquivo. Falha aqui interrompe a atualização.
+DB_FILE="$APP_DIR/deploy/data/db/orbitbase.db"
+if [ -f "$DB_FILE" ]; then
+  log "Backup do banco em $BACKUP_DIR/orbitbase.db.gz"
+  ( umask 077
+    BACKEND_CONTAINER="$(docker ps --filter 'label=com.docker.compose.service=backend' --format '{{.Names}}' 2>/dev/null | grep -i orbitbase | head -n1 || true)"
+    if [ -n "$BACKEND_CONTAINER" ] && docker exec "$BACKEND_CONTAINER" python -c "
+import sqlite3
+src = sqlite3.connect('/app/backend/data/orbitbase.db')
+dst = sqlite3.connect('/app/backend/data/.install-backup.db')
+src.backup(dst); dst.close(); src.close()
+"; then
+      mv "$APP_DIR/deploy/data/db/.install-backup.db" "$BACKUP_DIR/orbitbase.db"
+    else
+      cp -p "$DB_FILE" "$BACKUP_DIR/orbitbase.db"
+    fi
+    gzip -f "$BACKUP_DIR/orbitbase.db"
+  ) || die "Backup do banco falhou; nada foi alterado."
+  echo "Banco salvo: $BACKUP_DIR/orbitbase.db.gz ($(du -h "$BACKUP_DIR/orbitbase.db.gz" | cut -f1))"
+  echo "Restaurar:   gunzip -c $BACKUP_DIR/orbitbase.db.gz > $DB_FILE  (com o backend parado)"
+else
+  warn "Banco $DB_FILE não existe ainda (primeira instalação): sem backup do banco."
+fi
+
 # ---------------------------------------------------------------- pacotes
 log "Pacotes base"
 export DEBIAN_FRONTEND=noninteractive
@@ -249,5 +275,5 @@ fi
 log "Pronto"
 echo "Local:   http://127.0.0.1:$PORT/  (API em /api/health)"
 echo "Público: https://$DOMAIN/  (ou http:// se o HTTPS ainda não foi emitido)"
-echo "Backup da config anterior: $BACKUP_DIR"
+echo "Backup da config e do banco: $BACKUP_DIR"
 echo "Desfazer: bash $APP_DIR/deploy/rollback.sh"
