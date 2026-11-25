@@ -9,11 +9,25 @@ from app.models import User, UserEquipment
 
 router = APIRouter(prefix="/users/me/equipment", tags=["Meus equipamentos"])
 
+
+def ensure_equipment_columns(engine) -> None:
+    """Acrescenta colunas novas em bancos já existentes (create_all não altera tabelas)."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "user_equipment" not in insp.get_table_names():
+        return
+    have = {c["name"] for c in insp.get_columns("user_equipment")}
+    with engine.begin() as conn:
+        if "manufacturer" not in have:
+            conn.execute(text("ALTER TABLE user_equipment ADD COLUMN manufacturer VARCHAR(40)"))
+
 MAX_EQUIPMENT_PER_USER = 50
 
 
 class EquipmentPayload(BaseModel):
     name: str = Field(min_length=1, max_length=80)
+    manufacturer: str | None = Field(default=None, max_length=40)
     receiver_type: str | None = Field(default=None, max_length=40)
     board_id: str | None = Field(default=None, max_length=40)
     firmware: str | None = Field(default=None, max_length=40)

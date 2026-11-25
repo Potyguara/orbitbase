@@ -233,19 +233,45 @@
     return equipmentList.find((e) => String(e.id) === id) || null;
   }
 
+  // fabricante a partir do prefixo do modelo (cadastros antigos: "TPS HIPER_SR")
+  const MAKER_PREFIX = {
+    TPS: "Topcon", TOPCON: "Topcon", CHC: "CHC", HUACE: "CHC", SOUTH: "South", COMNAV: "ComNav",
+    TRIMBLE: "Trimble", TRM: "Trimble", LEICA: "Leica", EMLID: "Emlid", STONEX: "Stonex",
+    "HI-TARGET": "Hi-Target", KOLIDA: "Kolida", FOIF: "FOIF", SPECTRA: "Spectra", SEPTENTRIO: "Septentrio",
+  };
+
+  function splitModel(manufacturer, model) {
+    const parts = String(model || "").trim().split(/\s+/).filter(Boolean);
+    const first = (parts[0] || "").toUpperCase();
+    let maker = manufacturer || "";
+    if (parts.length > 1 && (MAKER_PREFIX[first] || first === maker.toUpperCase())) {
+      if (!maker) maker = MAKER_PREFIX[first] || parts[0];
+      parts.shift();
+    }
+    return { maker, model: parts.join(" ") };
+  }
+
+  function receiverTypeText(eq) {
+    const { maker, model } = splitModel(eq.manufacturer, eq.receiver_type);
+    return [maker, model].filter(Boolean).join(" ");
+  }
+
   function receiverChoice() {
     const eq = selectedEquipment();
-    if (!eq) return { type: null, number: null, version: null, antennaType: null, antennaNumber: null };
+    if (!eq) {
+      return { manufacturer: null, type: null, number: null, version: null, antennaType: null, antennaNumber: null };
+    }
+    const { maker, model } = splitModel(eq.manufacturer, eq.receiver_type);
     return {
-      type: eq.receiver_type || null, number: eq.board_id || null, version: eq.firmware || null,
-      antennaType: eq.antenna_type || null, antennaNumber: eq.antenna_serial || null,
+      manufacturer: maker || null, type: model || null, number: eq.board_id || null,
+      version: eq.firmware || null, antennaType: eq.antenna_type || null, antennaNumber: eq.antenna_serial || null,
     };
   }
 
   function equipmentSummary(eq) {
     if (!eq) return "O RINEX sai como VRS genérica (REC # VRS, antena VIRTUAL).";
     const parts = [
-      eq.receiver_type || "modelo não informado",
+      receiverTypeText(eq) || "modelo não informado",
       eq.board_id ? `placa ${eq.board_id}` : "sem ID da placa",
       eq.firmware ? `firmware ${eq.firmware}` : null,
       eq.antenna_type ? `antena ${eq.antenna_type}` : "antena VIRTUAL",
@@ -269,7 +295,40 @@
     const labelSerial = (sn.match(/([0-9]{3,}[-0-9]*)\s*$/) || [])[1] || "";
     // firmware: só a versão e a família ("4.7 HSR"), sem a data
     const firmware = fw.split(/\s+/).slice(0, 2).join(" ");
-    return { id, model: model.toUpperCase(), labelSerial, firmware };
+    return {
+      maker: "Topcon", id, model: model.toUpperCase(), labelSerial, firmware,
+      antenna: model ? `TPS${model.toUpperCase()}` : "",
+    };
+  }
+
+  // Cabeçalho texto dos arquivos CHC (.hcn, "HUACENAV COLLECTED DATA FILE") e
+  // ComNav (.cnb, "COMPASS COLLECTED DATA FILE"): linhas "Chave:valor".
+  function parseKeyValueHeader(text) {
+    const head = text.slice(0, 4096);
+    const kv = {};
+    head.split(/\r?\n/).forEach((line) => {
+      const m = line.match(/^([A-Za-z #]+?)\s*:\s*([\x20-\x7e]*)$/);
+      if (m && !(m[1].trim().toUpperCase() in kv)) kv[m[1].trim().toUpperCase()] = m[2].trim();
+    });
+    const isChc = /HUACENAV COLLECTED DATA FILE/i.test(head);
+    const isComNav = /COMPASS COLLECTED DATA FILE/i.test(head);
+    if (!isChc && !isComNav && !kv["RECEIVERID"] && !kv["REC #"]) return null;
+    const recType = kv["REC TYPE"] || kv["MODEL"] || "";
+    const { maker, model } = splitModel("", recType);
+    const antType = (kv["ANT TYPE"] || kv["ANTTYPE"] || "").replace(/\(.*\)/, "").trim();
+    return {
+      maker: maker || (isChc ? "CHC" : isComNav ? "ComNav" : ""),
+      id: kv["REC #"] || kv["RECEIVERID"] || "",
+      model: (maker ? model : recType).toUpperCase(),
+      firmware: kv["REC VERS"] || "",
+      antenna: antType.toUpperCase(),
+      labelSerial: kv["ANT #"] || "",
+    };
+  }
+
+  function parseNativeHeader(text) {
+    if (/rcv\/id="/.test(text)) return parseTpsHeader(text);
+    return parseKeyValueHeader(text);
   }
 
   function setSelectOrOther(selId, otherId, value) {
@@ -300,7 +359,9 @@
   function fillForm(eq) {
     editingId = eq ? eq.id : null;
     setVal("unified-equipment-name", eq?.name);
-    setSelectOrOther("unified-receiver", "unified-receiver-other", eq?.receiver_type);
+    const split = splitModel(eq?.manufacturer, eq?.receiver_type);
+    setSelectOrOther("unified-manufacturer", "unified-manufacturer-other", split.maker);
+    setVal("unified-receiver", split.model);
     setVal("unified-receiver-number", eq?.board_id);
     setVal("unified-receiver-version", eq?.firmware);
     setSelectOrOther("unified-antenna", "unified-antenna-other", eq?.antenna_type);
@@ -324,12 +385,13 @@
   function closePanel() { $("unified-equipment-panel")?.classList.add("hidden"); }
 
   function formBody() {
-    const receiver = readSelect("unified-receiver", "unified-receiver-other");
+    const manufacturer = readSelect("unified-manufacturer", "unified-manufacturer-other");
+    const receiver = val("unified-receiver");
     const board = val("unified-receiver-number");
     const name = val("unified-equipment-name") ||
-      [receiver, val("unified-antenna-number") || board].filter(Boolean).join(" ");
+      [manufacturer, receiver, val("unified-antenna-number") || board].filter(Boolean).join(" ");
     return {
-      name, receiver_type: receiver, board_id: board, firmware: val("unified-receiver-version"),
+      name, manufacturer, receiver_type: receiver, board_id: board, firmware: val("unified-receiver-version"),
       antenna_type: readSelect("unified-antenna", "unified-antenna-other"),
       antenna_serial: val("unified-antenna-number"),
     };
@@ -405,24 +467,28 @@
       const file = input.files && input.files[0];
       if (!file) return;
       try {
-        const info = parseTpsHeader(await file.slice(0, 65536).text());
-        if (!info.id) { if (status) status.textContent = "Não achei rcv/id no início deste arquivo."; return; }
+        const buf = await file.slice(0, 65536).arrayBuffer();
+        const info = parseNativeHeader(new TextDecoder("latin1").decode(buf));
+        if (!info || !info.id) {
+          if (status) status.textContent = "Não achei o ID do receptor no início deste arquivo.";
+          return;
+        }
         setVal("unified-receiver-number", info.id);
         if (info.firmware) setVal("unified-receiver-version", info.firmware);
-        if (info.model) {
-          setSelectOrOther("unified-receiver", "unified-receiver-other", `TPS ${info.model}`);
-          setSelectOrOther("unified-antenna", "unified-antenna-other", `TPS${info.model}`);
-        }
+        if (info.maker) setSelectOrOther("unified-manufacturer", "unified-manufacturer-other", info.maker);
+        if (info.model) setVal("unified-receiver", info.model);
+        if (info.antenna) setSelectOrOther("unified-antenna", "unified-antenna-other", info.antenna);
         if (info.labelSerial) setVal("unified-antenna-number", info.labelSerial);
-        if (!val("unified-equipment-name") && info.model) {
-          setVal("unified-equipment-name", `${info.model.replace(/_/g, " ")} ${info.labelSerial || info.id}`.trim());
+        if (!val("unified-equipment-name")) {
+          const label = [info.maker, info.model.replace(/_/g, " "), info.labelSerial || info.id];
+          setVal("unified-equipment-name", label.filter(Boolean).join(" "));
         }
         if (status) {
-          status.textContent = `Lido: placa ${info.id}` + (info.model ? ` · ${info.model}` : "") +
-            (info.labelSerial ? ` · rótulo ${info.labelSerial}` : "") + ". Confira e salve.";
+          status.textContent = `Lido: ${[info.maker, info.model].filter(Boolean).join(" ") || "receptor"} · ID ${info.id}` +
+            (info.antenna ? ` · antena ${info.antenna}` : "") + ". Confira e salve.";
         }
       } catch (_) {
-        if (status) status.textContent = "Não consegui ler o .tps.";
+        if (status) status.textContent = "Não consegui ler o arquivo.";
       }
     });
   }
@@ -447,7 +513,7 @@
     $("unified-equipment-save")?.addEventListener("click", () => saveEquipment(false));
     $("unified-equipment-save-new")?.addEventListener("click", () => saveEquipment(true));
     $("unified-equipment-delete")?.addEventListener("click", deleteEquipment);
-    ["unified-receiver", "unified-antenna"].forEach((id) => {
+    ["unified-manufacturer", "unified-antenna"].forEach((id) => {
       $(id)?.addEventListener("change", () =>
         $(`${id}-other`)?.classList.toggle("hidden", $(id).value !== "__other"));
     });
@@ -468,7 +534,9 @@
     const rc = receiverChoice();
     updateProcessingModal({
       percent: 2, status: "running", message: "Iniciando…",
-      detail: rc.number ? `Receptor no RINEX: ${rc.type || ""} · placa ${rc.number}` : "Receptor no RINEX: padrão VRS",
+      detail: rc.number
+        ? `Receptor no RINEX: ${[rc.manufacturer, rc.type].filter(Boolean).join(" ")} · ID ${rc.number}`
+        : "Receptor no RINEX: padrão VRS",
     });
     if (unifiedPoll) clearInterval(unifiedPoll);
     unifiedPoll = setInterval(() => pollUnified(jobId), 3000);
@@ -484,6 +552,7 @@
           ...(() => {
             const c = receiverChoice();
             return {
+              receiver_manufacturer: c.manufacturer,
               receiver_type: c.type, receiver_number: c.number, receiver_version: c.version,
               antenna_type: c.antennaType, antenna_number: c.antennaNumber,
             };
