@@ -346,6 +346,10 @@
       sel.appendChild(opt);
     });
     sel.value = equipmentList.some((e) => String(e.id) === String(selectedId)) ? String(selectedId) : "";
+    // O seletor fica dentro do formulário do job: "Criar job" chama form.reset(),
+    // que voltaria para o primeiro item (Padrão VRS) sem avisar. Marcar a opção
+    // escolhida como padrão faz o reset manter o equipamento.
+    Array.from(sel.options).forEach((o) => { o.defaultSelected = o.value === sel.value; });
     const manage = $("unified-equipment-manage");
     if (manage) manage.textContent = sel.value ? "Editar este equipamento" : "Cadastrar equipamento";
     showSummary();
@@ -431,6 +435,13 @@
       renderEquipment(sel.value);
       closePanel();
     });
+    // segurança extra: qualquer reset do formulário reaplica o equipamento lembrado
+    sel.form?.addEventListener("reset", () => setTimeout(() => {
+      let saved = "";
+      try { saved = localStorage.getItem("ob_equipment_id") || ""; } catch (_) {}
+      renderEquipment(saved);
+      closePanel();
+    }, 0));
     $("unified-equipment-manage")?.addEventListener("click", () => openPanel(selectedEquipment()));
     $("unified-equipment-close")?.addEventListener("click", closePanel);
     $("unified-equipment-save")?.addEventListener("click", () => saveEquipment(false));
@@ -454,7 +465,11 @@
     if (downloads) { downloads.classList.add("hidden"); downloads.innerHTML = ""; }
 
     openProcessingModal(job?.name || `Job ${jobId}`);
-    updateProcessingModal({ percent: 2, status: "running", message: "Iniciando…", detail: "" });
+    const rc = receiverChoice();
+    updateProcessingModal({
+      percent: 2, status: "running", message: "Iniciando…",
+      detail: rc.number ? `Receptor no RINEX: ${rc.type || ""} · placa ${rc.number}` : "Receptor no RINEX: padrão VRS",
+    });
     if (unifiedPoll) clearInterval(unifiedPoll);
     unifiedPoll = setInterval(() => pollUnified(jobId), 3000);
 
