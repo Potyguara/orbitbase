@@ -480,16 +480,6 @@ async function apiRequest(endpoint, options = {}) {
    API WRAPPERS
    ========================================================= */
 
-async function register(name, email, password) {
-  const data = await apiRequest("/auth/register", {
-    method: "POST",
-    body: JSON.stringify({ name, email, password })
-  });
-
-  setToken(data.access_token);
-  return data;
-}
-
 async function login(email, password) {
   const data = await apiRequest("/auth/login", {
     method: "POST",
@@ -1465,44 +1455,11 @@ async function handleSyncRbmcStations() {
 }
 
 /* =========================================================
-   AUTH TABS
-   ========================================================= */
-
-function initTabs() {
-  const tabButtons = document.querySelectorAll(".tab-btn");
-  const loginTab = document.getElementById("login-tab");
-  const registerTab = document.getElementById("register-tab");
-
-  if (!tabButtons.length || !loginTab || !registerTab) return;
-
-  tabButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      tabButtons.forEach((btn) => btn.classList.remove("active"));
-      button.classList.add("active");
-
-      const tab = button.getAttribute("data-tab");
-
-      loginTab.classList.remove("active");
-      registerTab.classList.remove("active");
-
-      if (tab === "login") {
-        loginTab.classList.add("active");
-      } else {
-        registerTab.classList.add("active");
-      }
-    });
-  });
-}
-
-/* =========================================================
    AUTH PAGE
    ========================================================= */
 
 function initAuthPage() {
-  initTabs();
-
   const loginForm = document.getElementById("login-form");
-  const registerForm = document.getElementById("register-form");
 
 if (getToken()) {
   goToCurrentModeDashboard();
@@ -1525,35 +1482,6 @@ if (getToken()) {
         showMessage(
           "auth-message",
           error.message || "Não foi possível realizar o login.",
-          true
-        );
-      }
-    });
-  }
-
-  if (registerForm) {
-    registerForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      clearMessage("auth-message");
-
-      const name = document.getElementById("register-name").value.trim();
-      const email = document.getElementById("register-email").value.trim();
-      const password = document.getElementById("register-password").value;
-      const confirmPassword = document.getElementById("register-password-confirm").value;
-
-      if (password !== confirmPassword) {
-        showMessage("auth-message", "As senhas informadas não coincidem.", true);
-        return;
-      }
-
-      try {
-        await register(name, email, password);
-        showMessage("auth-message", "Cadastro realizado com sucesso.");
-       goToCurrentModeDashboard();
-      } catch (error) {
-        showMessage(
-          "auth-message",
-          error.message || "Não foi possível concluir o cadastro.",
           true
         );
       }

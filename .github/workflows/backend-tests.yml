@@ -16,5 +16,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt pytest
+      # httpx: usado pelo TestClient do FastAPI nos testes (<0.28 por causa do starlette 0.38)
+      - run: pip install -r requirements.txt pytest "httpx<0.28"
       - run: python -m pytest

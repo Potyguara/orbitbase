@@ -1942,7 +1942,7 @@ def _write_rinex_v3_mixed_obs(
     lines.append(_pad_label(marker_name[:60], "MARKER NAME"))
     lines.append(_pad_label("GEODETIC", "MARKER TYPE"))
     lines.append(
-        _pad_label(f"{'OrbitBase':<20}{'Biome Projetos':<40}", "OBSERVER / AGENCY")
+        _pad_label(f"{'OrbitBase':<20}{'Amazonika Engenharia':<40}", "OBSERVER / AGENCY")
     )
     lines.append(
         _pad_label(
@@ -2179,7 +2179,7 @@ def write_master_based_ibge_ppp_rinex_v2(
     lines.append(_pad80(marker_name, "MARKER NAME"))
     lines.append(_pad80("", "MARKER NUMBER"))
     lines.append(
-        _pad80(f"{'OrbitBase':<20}{'Biome Projetos':<40}", "OBSERVER / AGENCY")
+        _pad80(f"{'OrbitBase':<20}{'Amazonika Engenharia':<40}", "OBSERVER / AGENCY")
     )
     lines.append(
         _pad80(

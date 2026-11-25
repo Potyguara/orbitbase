@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OrbitBase | Solicitar cotação</title>
+  <meta name="description" content="Solicite uma cotação ou mais informações sobre o OrbitBase à Amazonika Engenharia." />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand">
+        <div class="brand-mark">O</div>
+        <div>
+          <h1>OrbitBase</h1>
+          <p>by Amazonika Engenharia</p>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <a href="./index.html#beneficios">Benefícios</a>
+        <a href="./index.html#como-funciona">Como funciona</a>
+        <a href="./pricing.html">Planos</a>
+        <a href="./terms.html">Termos de Uso</a>
+        <a href="./methodology.html">Metodologia</a>
+        <a class="btn btn-outline" href="./auth.html">Entrar</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="section">
+      <div class="container">
+        <div class="section-head">
+          <span class="eyebrow">Contato</span>
+          <h3>Solicitar cotação ou mais informações</h3>
+          <p>
+            O acesso ao OrbitBase é liberado pela Amazonika Engenharia. Conte o que você precisa
+            e retornamos com a proposta e os dados de acesso.
+          </p>
+        </div>
+
+        <div class="contact-grid">
+          <form id="contact-form" class="form-card contact-form feature-card">
+            <h3>Seus dados</h3>
+
+            <label for="c-name">Nome</label>
+            <input id="c-name" type="text" required />
+
+            <label for="c-company">Empresa (opcional)</label>
+            <input id="c-company" type="text" />
+
+            <label for="c-email">E-mail</label>
+            <input id="c-email" type="email" required />
+
+            <label for="c-phone">Telefone / WhatsApp (opcional)</label>
+            <input id="c-phone" type="tel" />
+
+            <label for="c-interest">Interesse</label>
+            <select id="c-interest">
+              <option>Cotação de acesso ao OrbitBase</option>
+              <option>Plano Free (teste)</option>
+              <option>Plano Sob Demanda</option>
+              <option>Plano Pro</option>
+              <option>Serviços de topografia e geodésia</option>
+              <option>Outras informações</option>
+            </select>
+
+            <label for="c-message">Mensagem</label>
+            <textarea id="c-message" rows="5" placeholder="Ex.: região de trabalho, quantidade de horas de base por mês, prazos."></textarea>
+
+            <div class="contact-actions">
+              <button type="submit" class="btn btn-primary" data-channel="whatsapp">Enviar pelo WhatsApp</button>
+              <button type="submit" class="btn btn-secondary" data-channel="email">Enviar por e-mail</button>
+            </div>
+            <p class="helper-text">Os botões abrem o WhatsApp ou o seu programa de e-mail com a mensagem pronta.</p>
+          </form>
+
+          <aside class="feature-card contact-info">
+            <h4>Amazonika Engenharia LTDA</h4>
+            <p>CNPJ 49.158.834/0001-19</p>
+            <p>Av. Almirante Barroso, 620, Central<br />Macapá - AP, 68900-041</p>
+            <p><strong>E-mail</strong><br /><a id="contact-email-link" href="#"></a></p>
+            <p><strong>WhatsApp</strong><br /><a id="contact-whatsapp-link" href="#" target="_blank" rel="noopener"></a></p>
+          </aside>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-grid">
+      <div>
+        <h4>OrbitBase</h4>
+        <p>Plataforma web para geração de bases virtuais offline e exportação RINEX.</p>
+      </div>
+
+      <div>
+        <h5>Empresa</h5>
+        <p>Amazonika Engenharia LTDA<br />CNPJ 49.158.834/0001-19</p>
+      </div>
+
+      <div>
+        <h5>Navegação</h5>
+        <p><a href="./index.html">Página inicial</a></p>
+        <p><a href="./pricing.html">Planos</a></p>
+      </div>
+
+      <div>
+        <h5>Documentos</h5>
+        <p><a href="./terms.html">Termos de Uso</a></p>
+        <p><a href="./methodology.html">Metodologia</a></p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="./contato.js"></script>
+</body>
+</html>

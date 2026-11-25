@@ -538,7 +538,7 @@ def write_advanced_rinex_from_seed(
     lines.append(_header_line(marker_name[:60], "MARKER NAME"))
     lines.append(_header_line("", "MARKER NUMBER"))
     lines.append(
-        _header_line("OrbitBase           Biome Projetos", "OBSERVER / AGENCY")
+        _header_line("OrbitBase           Amazonika Engenharia", "OBSERVER / AGENCY")
     )
     lines.append(
         _header_line(
