@@ -135,40 +135,55 @@
               <label class="ob-field ob-span-2">Apelido
                 <input id="unified-equipment-name" type="text" maxlength="80" placeholder="ex.: HiPer SR 1064-12234" />
               </label>
-              <label class="ob-field ob-span-2">Ler do arquivo .tps (opcional)
-                <input id="unified-tps-file" type="file" accept=".tps,.TPS" />
+              <label class="ob-field ob-span-2">Ler do arquivo bruto (.tps, .hcn, .cnb), opcional
+                <input id="unified-tps-file" type="file" accept=".tps,.TPS,.hcn,.HCN,.cnb,.CNB" />
                 <small id="unified-tps-status" class="ob-hint"></small>
               </label>
-              <label class="ob-field">Modelo do receptor
-                <select id="unified-receiver">
-                  <option value="" selected>Escolha o modelo</option>
-                  <option>TPS HIPER_SR</option>
-                  <option>TPS HIPER_VR</option>
-                  <option>TPS HIPER_HR</option>
-                  <option>TPS HIPER_V</option>
-                  <option>TOPCON HIPER VR</option>
-                  <option>TOPCON HIPER V</option>
-                  <option>TOPCON HIPER SR</option>
-                  <option>TOPCON HIPER HR</option>
-                  <option>TOPCON GR-5</option>
-                  <option>TRIMBLE R12</option>
-                  <option>TRIMBLE R10</option>
-                  <option>TRIMBLE R8S</option>
-                  <option>LEICA GS18</option>
-                  <option>LEICA GS16</option>
-                  <option>CHC I73</option>
-                  <option>CHC I90</option>
-                  <option>EMLID REACH RS3</option>
-                  <option>EMLID REACH RS2</option>
-                  <option>SOUTH GALAXY G1</option>
-                  <option>COMNAV T300</option>
-                  <option>STONEX S900</option>
+              <label class="ob-field">Fabricante
+                <select id="unified-manufacturer">
+                  <option value="">Escolha</option>
+                  <option>Topcon</option>
+                  <option>CHC</option>
+                  <option>South</option>
+                  <option>ComNav</option>
+                  <option>Trimble</option>
+                  <option>Leica</option>
+                  <option>Emlid</option>
+                  <option>Stonex</option>
+                  <option>Hi-Target</option>
+                  <option>Kolida</option>
+                  <option>FOIF</option>
+                  <option>Spectra</option>
+                  <option>Septentrio</option>
                   <option value="__other">Outro…</option>
                 </select>
-                <input id="unified-receiver-other" type="text" maxlength="20" placeholder="Modelo do receptor" class="hidden" />
+                <input id="unified-manufacturer-other" type="text" maxlength="20" placeholder="Fabricante" class="hidden" />
+              </label>
+              <label class="ob-field">Modelo do receptor
+                <input id="unified-receiver" type="text" maxlength="20" list="unified-receiver-models" placeholder="ex.: HIPER_SR, I50, T300" />
+                <datalist id="unified-receiver-models">
+                  <option value="HIPER_SR"></option>
+                  <option value="HIPER_VR"></option>
+                  <option value="HIPER_HR"></option>
+                  <option value="HIPER_V"></option>
+                  <option value="GR-5"></option>
+                  <option value="I50"></option>
+                  <option value="I73"></option>
+                  <option value="I90"></option>
+                  <option value="T300"></option>
+                  <option value="GALAXY G1"></option>
+                  <option value="R12"></option>
+                  <option value="R10"></option>
+                  <option value="R8S"></option>
+                  <option value="GS18"></option>
+                  <option value="GS16"></option>
+                  <option value="REACH RS3"></option>
+                  <option value="REACH RS2"></option>
+                  <option value="S900"></option>
+                </datalist>
               </label>
               <label class="ob-field">ID interno da placa (rcv/id)
-                <input id="unified-receiver-number" type="text" maxlength="20" placeholder="ex.: O0IZ4RS5R82" title="Vai em REC # do RINEX. É o rcv/id do .tps, o mesmo que o Topcon Tools mostra na coluna receptor (não é o serial do rótulo)." />
+                <input id="unified-receiver-number" type="text" maxlength="20" placeholder="ex.: O0IZ4RS5R82, 3487343" title="Vai em REC # do RINEX: rcv/id no .tps da Topcon, ReceiverID / REC # no .hcn e .cnb. É o que o Topcon Tools mostra na coluna receptor." />
               </label>
               <label class="ob-field">Firmware do receptor
                 <input id="unified-receiver-version" type="text" maxlength="20" placeholder="Opcional" />
@@ -186,6 +201,7 @@
                   <option>TRMR8S</option>
                   <option>LEIGS18</option>
                   <option>LEIGS16</option>
+                  <option>CHCI50</option>
                   <option>CHCI73</option>
                   <option>CHCI90</option>
                   <option>EMLREACH_RS3</option>
@@ -448,6 +464,6 @@
   </div>
 
   <script src="./script.js?v=505"></script>
-  <script src="./script_unified.js?v=8"></script>
+  <script src="./script_unified.js?v=9"></script>
 </body>
 </html>

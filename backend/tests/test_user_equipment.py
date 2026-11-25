@@ -45,14 +45,14 @@ def client(tmp_path, monkeypatch):
 
 def test_equipment_crud_and_isolation(client):
     body = {
-        "name": "HiPer SR 1064-12234", "receiver_type": "TPS HIPER_SR",
+        "name": "HiPer SR 1064-12234", "manufacturer": "Topcon", "receiver_type": "TPS HIPER_SR",
         "board_id": "O0IZ4RS5R82", "firmware": "4.7 HSR",
         "antenna_type": "TPSHIPER_SR", "antenna_serial": "1064-12234",
     }
     r = client.post("/users/me/equipment", json=body)
     assert r.status_code == 201, r.text
     eq = r.json()
-    assert eq["board_id"] == "O0IZ4RS5R82"
+    assert eq["board_id"] == "O0IZ4RS5R82" and eq["manufacturer"] == "Topcon"
 
     r = client.put(f"/users/me/equipment/{eq['id']}", json={**body, "firmware": "4.8 HSR"})
     assert r.json()["firmware"] == "4.8 HSR"
@@ -69,3 +69,17 @@ def test_equipment_crud_and_isolation(client):
 
 def test_equipment_requires_name(client):
     assert client.post("/users/me/equipment", json={"name": "   "}).status_code == 422
+
+
+def test_manufacturer_column_added_to_old_table():
+    from sqlalchemy import create_engine, inspect, text
+
+    from app.routers.user_equipment import ensure_equipment_columns
+
+    engine = create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE user_equipment (id INTEGER PRIMARY KEY, name VARCHAR(80))"))
+    ensure_equipment_columns(engine)
+    ensure_equipment_columns(engine)  # idempotente
+    cols = {c["name"] for c in inspect(engine).get_columns("user_equipment")}
+    assert "manufacturer" in cols

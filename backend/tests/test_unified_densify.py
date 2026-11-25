@@ -283,7 +283,7 @@ def test_receiver_header_choice_goes_to_rinex(tmp_path):
     assert default["antenna_type"] == "VIRTUAL"
 
     rec = receiver_header("Topcon Hiper SR ç", "1234-5678", "TPSHIPER_SR", "ANT99")
-    assert rec["number"] == "1234-5678" and rec["type"] == "TOPCON HIPER SR"
+    assert rec["number"] == "1234-5678" and rec["type"] == "Topcon Hiper SR"
     assert rec["antenna_type"] == "TPSHIPER_SR     NONE" and rec["antenna_number"] == "ANT99"
 
     obs = {"C1": 2.1e7, "P1": 2.1e7, "L1": 1.1e8, "C2": 2.1e7, "P2": 2.1e7, "L2": 0.9e8}
@@ -297,7 +297,7 @@ def test_receiver_header_choice_goes_to_rinex(tmp_path):
     text = open(out).read().splitlines()
     rec_line = [l for l in text if "REC # / TYPE / VERS" in l][0]
     ant_line = [l for l in text if "ANT # / TYPE" in l][0]
-    assert rec_line.startswith("1234-5678".ljust(20) + "TOPCON HIPER SR".ljust(20) + "ORBITBASE 1.0".ljust(20))
+    assert rec_line.startswith("1234-5678".ljust(20) + "Topcon Hiper SR".ljust(20) + "ORBITBASE 1.0".ljust(20))
     assert ant_line.startswith("ANT99".ljust(20) + "TPSHIPER_SR     NONE")
     assert rec_line[60:].rstrip() == "REC # / TYPE / VERS" and ant_line[60:].rstrip() == "ANT # / TYPE"
     assert any("VIRTUAL REFERENCE STATION" in l for l in text)
@@ -336,3 +336,16 @@ def test_board_id_from_tps_goes_to_rec_number(tmp_path):
     ant_line = [l for l in text if "ANT # / TYPE" in l][0]
     assert rec_line[:60] == "O0IZ4RS5R82".ljust(20) + "TPS HIPER_SR".ljust(20) + "4.7 HSR".ljust(20)
     assert ant_line[:40] == "1064-12234".ljust(20) + "TPSHIPER_SR     NONE"
+
+
+def test_manufacturer_goes_first_in_rec_type():
+    """Topcon Tools grava REC TYPE com o fabricante (ex.: 'Topcon')."""
+    from app.services.vrs_unified.unified_service import receiver_header, receiver_type_field
+
+    assert receiver_type_field("Topcon", "TPS HIPER_SR") == "Topcon HIPER_SR"
+    assert receiver_type_field("CHC", "CHC I50") == "CHC I50"
+    assert receiver_type_field("ComNav", "T300") == "ComNav T300"
+    assert receiver_type_field("Topcon", "") == "Topcon"
+    assert receiver_type_field(None, "TPS HIPER_SR") == "TPS HIPER_SR"
+    rec = receiver_header("TPS HIPER_SR", "O1FGEMOTEZ6", "TPSHIPER_SR", "1064-12222", "4.7 HSR", "Topcon")
+    assert rec["type"] == "Topcon HIPER_SR" and rec["number"] == "O1FGEMOTEZ6"

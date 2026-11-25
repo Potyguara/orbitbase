@@ -455,6 +455,7 @@ def process_unified_vrs(
     antenna_type: str | None = None,
     antenna_number: str | None = None,
     receiver_version: str | None = None,
+    receiver_manufacturer: str | None = None,
 ) -> dict:
     """Gera a base VRS na janela exata pedida.
 
@@ -491,7 +492,8 @@ def process_unified_vrs(
             job, results_dir, epochs, skipped, target_xyz, start_local, end_local,
             start_utc, end_utc, step_seconds, {"network_mode": "master", **info},
             receiver=receiver_header(
-                receiver_type, receiver_number, antenna_type, antenna_number, receiver_version
+                receiver_type, receiver_number, antenna_type, antenna_number, receiver_version,
+                receiver_manufacturer,
             ),
         )
 
@@ -547,7 +549,8 @@ def process_unified_vrs(
         job, results_dir, epochs, skipped, target_xyz, start_local, end_local,
         start_utc, end_utc, step_seconds,
         receiver=receiver_header(
-                receiver_type, receiver_number, antenna_type, antenna_number, receiver_version
+                receiver_type, receiver_number, antenna_type, antenna_number, receiver_version,
+                receiver_manufacturer,
             ),
         extra={
             "network_mode": "basic",
@@ -605,10 +608,37 @@ def _copy_navigation_files(results_dir: Path, rinex_name: str, nav_paths: list) 
 IGS_RADOMES = {"NONE", "SCIS", "SCIT", "TZGD", "LEIT", "LEIS", "TCWD", "DOME", "UNAV"}
 
 
-def _rinex_text(value: str | None, size: int = 20) -> str:
-    """ASCII maiúsculo, espaços simples, cortado no tamanho do campo RINEX."""
+def _rinex_text(value: str | None, size: int = 20, upper: bool = True) -> str:
+    """ASCII, espaços simples, cortado no tamanho do campo RINEX."""
     text = "".join(ch for ch in str(value or "") if 32 <= ord(ch) < 127)
-    return " ".join(text.upper().split())[:size]
+    text = " ".join(text.split())
+    return (text.upper() if upper else text)[:size]
+
+
+# Prefixos de fabricante que aparecem no início do modelo (códigos IGS e nomes)
+MANUFACTURER_PREFIXES = {
+    "TPS": "Topcon", "TOPCON": "Topcon", "CHC": "CHC", "HUACE": "CHC", "SOUTH": "South",
+    "COMNAV": "ComNav", "TRIMBLE": "Trimble", "TRM": "Trimble", "LEICA": "Leica",
+    "EMLID": "Emlid", "STONEX": "Stonex", "HI-TARGET": "Hi-Target", "HITARGET": "Hi-Target",
+    "KOLIDA": "Kolida", "FOIF": "FOIF", "SPECTRA": "Spectra", "SEPT": "Septentrio",
+    "SEPTENTRIO": "Septentrio", "JAVAD": "Javad", "JPS": "Javad", "NOVATEL": "NovAtel",
+}
+
+
+def receiver_type_field(manufacturer: str | None, model: str | None) -> str:
+    """TYPE de REC # / TYPE / VERS: fabricante + modelo, como o Topcon Tools grava.
+
+    ("Topcon", "TPS HIPER_SR") -> "Topcon HIPER_SR"; sem fabricante, o modelo como veio.
+    """
+    maker = _rinex_text(manufacturer, 40, upper=False)
+    text = _rinex_text(model, 40, upper=False)
+    if maker:
+        parts = text.split(" ")
+        first = parts[0].upper() if parts and parts[0] else ""
+        if first and (first in MANUFACTURER_PREFIXES or first == maker.upper()):
+            parts = parts[1:]
+        text = " ".join([maker] + [p for p in parts if p])
+    return text[:20]
 
 
 def antenna_type_field(antenna_type: str | None) -> str:
@@ -633,6 +663,7 @@ def receiver_header(
     antenna_type: str | None = None,
     antenna_number: str | None = None,
     receiver_version: str | None = None,
+    receiver_manufacturer: str | None = None,
 ) -> dict:
     """Campos REC # / TYPE / VERS e ANT # / TYPE (RINEX: 20 colunas ASCII cada).
 
@@ -642,11 +673,11 @@ def receiver_header(
     o que o Topcon Tools usa para identificar o receptor; ele é gravado mesmo
     quando o modelo do receptor fica no padrão.
     """
-    rtype = _rinex_text(receiver_type)
-    rnumber = _rinex_text(receiver_number)
-    rversion = _rinex_text(receiver_version)
+    rtype = receiver_type_field(receiver_manufacturer, receiver_type)
+    rnumber = _rinex_text(receiver_number, upper=False)
+    rversion = _rinex_text(receiver_version, upper=False)
     atype = antenna_type_field(antenna_type)
-    anumber = _rinex_text(antenna_number)
+    anumber = _rinex_text(antenna_number, upper=False)
     return {
         "number": rnumber or "VRS",
         "type": rtype or "ORBITBASE VRS",
